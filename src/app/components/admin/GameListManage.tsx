@@ -10,6 +10,7 @@ import {
 } from '../../../utils/game-management';
 import { supabase } from '../../../lib/supabase';
 import { toast } from 'sonner';
+import { useAuth } from '../../context/AuthContext';
 
 const ACE_VENDOR_KEY = 'ace';
 
@@ -18,7 +19,17 @@ const CATEGORY_META: Record<string, { label: string; color: string }> = {
   slot:   { label: '슬롯',        color: 'text-green-400 bg-green-900/30'  },
 };
 
+// vendor_key → tab 이름 매핑 (ace 계열은 모두 'ace' 탭으로)
+function vendorKeyToTab(key: string): 'invest' | 'ace' | 'honor' | null {
+  if (key === 'ace' || key.startsWith('ace')) return 'ace';
+  if (key === 'honor') return 'honor';
+  // invest, gms 등 나머지는 invest 탭
+  return 'invest';
+}
+
 export default function GameListManage() {
+  const { user } = useAuth();
+  const [allowedTabs, setAllowedTabs] = useState<Set<'invest' | 'ace' | 'honor'> | null>(null); // null = 아직 로드 전
   const [apiTab, setApiTab] = useState<'invest' | 'ace' | 'honor'>('invest');
 
   // ── INVEST ──────────────────────────────────────────────────
@@ -90,6 +101,71 @@ export default function GameListManage() {
     ));
     toast.success('순서가 저장되었습니다.');
   }
+
+  // 운영사 계정이면 partner_settings에서 허용된 vendor key 목록을 가져와 탭 제한
+  useEffect(() => {
+    const resolveAllowedTabs = async () => {
+      if (!user || user.role === 'system_admin') {
+        // 시스템 관리자: 모든 탭 허용
+        setAllowedTabs(new Set(['invest', 'ace', 'honor']));
+        return;
+      }
+
+      // 운영사 본인 또는 그 상위 운영사의 partner_settings 조회
+      const operatorId = user.role === 'operator'
+        ? user.id
+        : user.hierarchyPath.find(async (id) => {
+            const { data } = await supabase.from('users').select('role').eq('id', id).single();
+            return data?.role === 'operator';
+          });
+
+      if (!operatorId) {
+        setAllowedTabs(new Set(['invest', 'ace', 'honor']));
+        return;
+      }
+
+      // 운영사 ID 확정 (hierarchy_path에서 operator 찾기)
+      let resolvedOperatorId = user.role === 'operator' ? user.id : null;
+      if (!resolvedOperatorId && user.hierarchyPath.length > 0) {
+        const { data: rows } = await supabase
+          .from('users')
+          .select('id, role')
+          .in('id', user.hierarchyPath)
+          .eq('role', 'operator');
+        resolvedOperatorId = rows?.[0]?.id ?? null;
+      }
+
+      if (!resolvedOperatorId) {
+        setAllowedTabs(new Set(['invest', 'ace', 'honor']));
+        return;
+      }
+
+      const { data: settings } = await supabase
+        .from('partner_settings')
+        .select('game_vendor_keys')
+        .eq('user_id', resolvedOperatorId)
+        .maybeSingle();
+
+      const keys: string[] = settings?.game_vendor_keys ?? [];
+      if (keys.length === 0) {
+        // 설정이 없으면 모두 허용
+        setAllowedTabs(new Set(['invest', 'ace', 'honor']));
+        return;
+      }
+
+      const tabs = new Set<'invest' | 'ace' | 'honor'>();
+      for (const k of keys) {
+        const tab = vendorKeyToTab(k);
+        if (tab) tabs.add(tab);
+      }
+      setAllowedTabs(tabs);
+
+      // 현재 선택된 탭이 허용되지 않으면 첫 번째 허용 탭으로 이동
+      setApiTab(prev => (tabs.has(prev) ? prev : (Array.from(tabs)[0] ?? 'invest')));
+    };
+
+    resolveAllowedTabs();
+  }, [user?.id]);
 
   useEffect(() => { loadProviders(); loadAceProviders(); loadHonorProviders(); }, []);
   useEffect(() => {
@@ -570,38 +646,44 @@ export default function GameListManage() {
 
       {/* API 탭 */}
       <div className="shrink-0 px-4 pt-3 pb-0 border-b border-slate-700 flex items-center gap-1">
-        <button
-          onClick={() => { setApiTab('invest'); setSearch(''); }}
-          className={`px-4 py-2 text-sm rounded-t-lg transition-colors font-medium border-b-2 ${
-            apiTab === 'invest'
-              ? 'border-blue-500 text-blue-400 bg-slate-800/60'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          INVEST
-        </button>
-        <button
-          onClick={() => { setApiTab('ace'); setSearch(''); }}
-          className={`px-4 py-2 text-sm rounded-t-lg transition-colors font-medium border-b-2 flex items-center gap-1.5 ${
-            apiTab === 'ace'
-              ? 'border-orange-500 text-orange-400 bg-slate-800/60'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          <span className="text-xs px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 border border-orange-600/40">ACE</span>
-          ACE
-        </button>
-        <button
-          onClick={() => { setApiTab('honor'); setSearch(''); }}
-          className={`px-4 py-2 text-sm rounded-t-lg transition-colors font-medium border-b-2 flex items-center gap-1.5 ${
-            apiTab === 'honor'
-              ? 'border-sky-500 text-sky-400 bg-slate-800/60'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          <span className="text-xs px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-600/40">HONOR</span>
-          HONOR
-        </button>
+        {(!allowedTabs || allowedTabs.has('invest')) && (
+          <button
+            onClick={() => { setApiTab('invest'); setSearch(''); }}
+            className={`px-4 py-2 text-sm rounded-t-lg transition-colors font-medium border-b-2 ${
+              apiTab === 'invest'
+                ? 'border-blue-500 text-blue-400 bg-slate-800/60'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            INVEST
+          </button>
+        )}
+        {(!allowedTabs || allowedTabs.has('ace')) && (
+          <button
+            onClick={() => { setApiTab('ace'); setSearch(''); }}
+            className={`px-4 py-2 text-sm rounded-t-lg transition-colors font-medium border-b-2 flex items-center gap-1.5 ${
+              apiTab === 'ace'
+                ? 'border-orange-500 text-orange-400 bg-slate-800/60'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <span className="text-xs px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 border border-orange-600/40">ACE</span>
+            ACE
+          </button>
+        )}
+        {(!allowedTabs || allowedTabs.has('honor')) && (
+          <button
+            onClick={() => { setApiTab('honor'); setSearch(''); }}
+            className={`px-4 py-2 text-sm rounded-t-lg transition-colors font-medium border-b-2 flex items-center gap-1.5 ${
+              apiTab === 'honor'
+                ? 'border-sky-500 text-sky-400 bg-slate-800/60'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <span className="text-xs px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-600/40">HONOR</span>
+            HONOR
+          </button>
+        )}
       </div>
 
       <div className="flex flex-1 overflow-hidden">
