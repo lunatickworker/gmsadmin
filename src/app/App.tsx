@@ -385,9 +385,8 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/game/*" element={<GameLayout />} />
           <Route path="/admin/*" element={<AdminLayout />} />
-          <Route path="/" element={<Navigate to="/game" replace />} />
+          <Route path="/*" element={<GameLayout />} />
         </Routes>
         <Toaster />
       </BrowserRouter>

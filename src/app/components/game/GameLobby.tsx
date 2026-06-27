@@ -349,6 +349,17 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
       .then(({ data }) => setLocalPoints(Number(data?.points ?? 0)));
   }, [user?.id]);
 
+  // 로그인 직후 읽지 않은 쪽지 수 조회 (쪽지관리 페이지 방문 없이도 알림 표시)
+  useEffect(() => {
+    if (!user) { setUnreadMessages(0); return; }
+    api.getMessages(user.id)
+      .then(res => {
+        const data = res.data || [];
+        setUnreadMessages(data.filter((m: any) => !m.is_read).length);
+      })
+      .catch(() => {});
+  }, [user?.id]);
+
   // 배너 팝업 로드
   useEffect(() => {
     api.getBanners({ active: true, position: 'popup' })
@@ -876,6 +887,8 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
     if (activeSession.current && user) {
       await handleModalClose();
     }
+    setActiveMenu('');
+    setSelectedProvider(null);
     onLogout();
   };
 
