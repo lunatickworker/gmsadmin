@@ -381,16 +381,12 @@ function ComingSoon() {
 }
 
 function DomainRedirect() {
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (
-      window.location.hostname === "gmsadmin.vercel.app" &&
-      window.location.pathname === "/"
-    ) {
-      navigate("/admin", { replace: true });
-    }
-  }, [navigate]);
+  if (
+    window.location.hostname === "gmsadmin.vercel.app" &&
+    window.location.pathname === "/"
+  ) {
+    return <Navigate to="/admin" replace />;
+  }
 
   return null;
 }
