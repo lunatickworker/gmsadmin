@@ -1,0 +1,31 @@
+@font-face {
+  font-family: 'AsianHeader1';
+  src: url('https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino/asianheader/aasihead1.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'AsianHeader2';
+  src: url('https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino/asianheader/asihead2.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'AsianHeader3';
+  src: url('https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino/asianheader/asihead3.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'AsianHeader4';
+  src: url('https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino/asianheader/asihead4.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
