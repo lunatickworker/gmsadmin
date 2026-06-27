@@ -22,7 +22,7 @@ import { api } from '../../../utils/api';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GameLobbyProps {
-  user: { id: string; username: string; name: string } | null;
+  user: { id: string; username: string; name: string; parent_id?: string | null } | null;
   balance: number;
   onLogin: (username: string, password: string) => Promise<boolean>;
   onLogout: () => void;
@@ -1387,7 +1387,7 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
           )}
           {!selectedProvider && activeMenu === 'notice' && (
             <div className="min-h-full bg-[#080808]">
-              <NoticePage userId={user?.id} />
+              <NoticePage userId={user?.id} parentId={user?.parent_id ?? undefined} />
             </div>
           )}
           {!selectedProvider && activeMenu === 'message' && user && (

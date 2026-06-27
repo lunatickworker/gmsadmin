@@ -70,16 +70,42 @@ export default function CustomerSupport() {
   const [partnerChain, setPartnerChain] = useState<PartnerNode[]>([]);
   const [partnerLoading, setPartnerLoading] = useState(false);
 
+  const isOperator = user ? user.level <= 2 : false;
+
   const loadTickets = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('customer_support')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
-      if (error) throw error;
-      setTickets(data ?? []);
+      let data: Ticket[] = [];
+
+      if (isOperator) {
+        // 운영사/시스템관리자: 전체 티켓 조회
+        const { data: all, error } = await supabase
+          .from('customer_support')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (error) throw error;
+        data = all ?? [];
+      } else if (user) {
+        // 본사/부본사/총판/매장: 직속 하위 회원(parent_id = 본인)의 티켓만 노출
+        const { data: directChildren } = await supabase
+          .from('users')
+          .select('id')
+          .eq('parent_id', user.id);
+        const childIds = (directChildren ?? []).map((c: any) => c.id);
+        if (childIds.length > 0) {
+          const { data: tickets, error } = await supabase
+            .from('customer_support')
+            .select('*')
+            .in('user_id', childIds)
+            .order('created_at', { ascending: false })
+            .limit(200);
+          if (error) throw error;
+          data = tickets ?? [];
+        }
+      }
+
+      setTickets(data);
     } catch {
       toast.error('문의 내역 로드 실패');
     } finally {

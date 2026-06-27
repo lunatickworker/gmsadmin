@@ -132,7 +132,7 @@ const GAME_SESSION_KEY = 'benz_game_session';
 
 function GameLayout() {
   const [balance, setBalance] = useState(0);
-  const [gameUser, setGameUser] = useState<{ id: string; username: string; name: string } | null>(() => {
+  const [gameUser, setGameUser] = useState<{ id: string; username: string; name: string; parent_id?: string | null } | null>(() => {
     try {
       const stored = localStorage.getItem(GAME_SESSION_KEY);
       return stored ? JSON.parse(stored).user : null;
@@ -323,7 +323,7 @@ function GameLayout() {
         success: true,
       });
 
-      const userObj = { id: dbUser.id, username: dbUser.username, name: dbUser.name ?? dbUser.username };
+      const userObj = { id: dbUser.id, username: dbUser.username, name: dbUser.name ?? dbUser.username, parent_id: dbUser.parent_id ?? null };
       localStorage.setItem(GAME_SESSION_KEY, JSON.stringify({ user: userObj }));
       setGameUser(userObj);
       setBalance(Number(dbUser.balance ?? 0));

@@ -228,7 +228,7 @@ export const api = {
     return apiFetch(`/notices${publishedOnly ? '?published=true' : ''}`);
   },
 
-  async createNotice(data: { title: string; content: string; type?: string; is_pinned?: boolean; is_published?: boolean; author_name?: string }) {
+  async createNotice(data: { title: string; content: string; type?: string; is_pinned?: boolean; is_published?: boolean; author_name?: string; author_id?: string; metadata?: Record<string, any> }) {
     return apiFetch('/notices', { method: 'POST', body: JSON.stringify(data) });
   },
 

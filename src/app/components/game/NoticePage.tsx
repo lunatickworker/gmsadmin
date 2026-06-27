@@ -9,8 +9,10 @@ interface Notice {
   type: string;
   is_pinned: boolean;
   author_name: string;
+  author_id: string | null;
   view_count: number;
   created_at: string;
+  metadata?: { author_role?: string } | null;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -29,11 +31,14 @@ const TYPE_COLORS: Record<string, string> = {
   important: 'bg-yellow-600/80',
 };
 
+const OPERATOR_ROLES = ['system_admin', 'operator'];
+
 interface Props {
   userId?: string;
+  parentId?: string;
 }
 
-export default function NoticePage({ userId }: Props) {
+export default function NoticePage({ userId, parentId }: Props) {
   const [notices, setNotices] = useState<Notice[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -44,7 +49,15 @@ export default function NoticePage({ userId }: Props) {
     const load = async () => {
       try {
         const res = await api.getNotices(true);
-        setNotices(res.data || []);
+        const all: Notice[] = res.data || [];
+        // 운영사/시스템관리자 공지 → 전체 노출
+        // 그 외 어드민 공지 → 작성자가 회원의 직속 파트너인 경우만 노출
+        const visible = all.filter(n => {
+          const authorRole = n.metadata?.author_role;
+          if (!authorRole || OPERATOR_ROLES.includes(authorRole)) return true;
+          return parentId ? n.author_id === parentId : false;
+        });
+        setNotices(visible);
       } catch {
         // silent
       } finally {

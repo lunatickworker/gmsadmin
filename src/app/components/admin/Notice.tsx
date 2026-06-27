@@ -7,6 +7,7 @@ import { Badge } from '../ui/badge';
 import { Bell, Pin, Plus, Pencil, Trash2, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 
 interface NoticeItem {
   id: string;
@@ -37,6 +38,7 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 export default function Notice() {
+  const { user } = useAuth();
   const [notices, setNotices] = useState<NoticeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -63,7 +65,11 @@ export default function Notice() {
   const handleCreate = async () => {
     if (!form.title || !form.content) { toast.error('제목과 내용을 입력해주세요'); return; }
     try {
-      await api.createNotice(form);
+      await api.createNotice({
+        ...form,
+        author_id: user?.id,
+        metadata: { author_role: user?.role },
+      });
       toast.success('공지사항이 등록되었습니다');
       setIsCreating(false);
       resetForm();

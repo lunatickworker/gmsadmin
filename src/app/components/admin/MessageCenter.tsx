@@ -7,6 +7,8 @@ import { Badge } from '../ui/badge';
 import { Send, Users, User, Search, Check, CheckCheck, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../../../utils/api';
+import { supabase } from '../../../utils/supabase/client';
+import { useAuth } from '../../context/AuthContext';
 
 interface SentMessage {
   id: string;
@@ -33,6 +35,8 @@ interface Stats {
 }
 
 export default function MessageCenter() {
+  const { user } = useAuth();
+  const isOperator = user ? user.level <= 2 : false;
   const [messageType, setMessageType] = useState<'all' | 'individual'>('all');
   const [form, setForm] = useState({ title: '', content: '' });
   const [userSearch, setUserSearch] = useState('');
@@ -45,11 +49,34 @@ export default function MessageCenter() {
 
   const loadData = async () => {
     try {
-      const [sentRes, statsRes] = await Promise.all([
-        api.getSentMessages(),
-        api.getMessageStats(),
-      ]);
-      setSentMessages(sentRes.data || []);
+      let query = supabase
+        .from('messages')
+        .select('id, title, content, sender_name, recipient_id, is_read, read_at, created_at, users:recipient_id(username, name)')
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (isOperator) {
+        // 운영사: 전체 발송 내역 조회 (sender 무관)
+      } else if (user) {
+        // 본사/부본사/총판/매장: 본인이 보낸 것 중 직속 하위에게 보낸 것만
+        // recipient의 parent_id가 현재 관리자 id인 메시지만 노출
+        const { data: directChildren } = await supabase
+          .from('users')
+          .select('id')
+          .eq('parent_id', user.id);
+        const childIds = (directChildren ?? []).map((c: any) => c.id);
+        query = query.eq('sender_id', user.id);
+        if (childIds.length > 0) {
+          query = query.or(`recipient_id.is.null,recipient_id.in.(${childIds.join(',')})`);
+        } else {
+          query = query.is('recipient_id', null);
+        }
+      }
+
+      const { data: sentData } = await query;
+      setSentMessages(sentData ?? []);
+
+      const statsRes = await api.getMessageStats();
       setStats(statsRes.data || { today: 0, week: 0, month: 0 });
     } catch {
       // silent
