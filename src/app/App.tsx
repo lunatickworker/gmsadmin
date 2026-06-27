@@ -380,6 +380,21 @@ function ComingSoon() {
   );
 }
 
+function DomainRedirect() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (
+      window.location.hostname === "gmsadmin.vercel.app" &&
+      window.location.pathname === "/"
+    ) {
+      navigate("/admin", { replace: true });
+    }
+  }, [navigate]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <AuthProvider>
