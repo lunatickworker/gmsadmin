@@ -380,25 +380,27 @@ function ComingSoon() {
   );
 }
 
-function DomainRedirect() {
-  if (
-    window.location.hostname === "gmsadmin.vercel.app" &&
-    window.location.pathname === "/"
-  ) {
-    return <Navigate to="/admin" replace />;
-  }
-
-  return null;
-}
-
 export default function App() {
+  const isAdminHost =
+    window.location.hostname === "gmsadmin.vercel.app";
+
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/admin/*" element={<AdminLayout />} />
-          <Route path="/*" element={<GameLayout />} />
+          {isAdminHost ? (
+            <>
+              <Route path="/" element={<Navigate to="/admin" replace />} />
+              <Route path="/admin/*" element={<AdminLayout />} />
+            </>
+          ) : (
+            <>
+              <Route path="/admin/*" element={<AdminLayout />} />
+              <Route path="/*" element={<GameLayout />} />
+            </>
+          )}
         </Routes>
+
         <Toaster />
       </BrowserRouter>
     </AuthProvider>
