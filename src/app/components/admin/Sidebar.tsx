@@ -232,7 +232,7 @@ export default function Sidebar({ currentPath, onNavigate }: SidebarProps) {
     <div className="w-64 h-screen border-r border-slate-700 flex flex-col" style={{ backgroundColor: '#0f0f0f' }}>
       <div className="px-1 py-(-1) border-b border-slate-700/60 flex items-center justify-center">
         <img
-          src="https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino/images/gms_logo_v1.png"
+          src="https://jlgvkwofxcyegcealbdr.supabase.co/storage/v1/object/public/image/gms_logo.png"
           alt="GMS Logo"
           className="h-25 w-auto object-contain"
         />

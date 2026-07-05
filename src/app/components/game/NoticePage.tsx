@@ -101,10 +101,10 @@ export default function NoticePage({ userId, parentId }: Props) {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="공지사항 검색..."
-            className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+            className="w-full bg-[#111] border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#c9a227]/50" />
         </div>
         <select value={filter} onChange={e => setFilter(e.target.value)}
-          className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500">
+          className="bg-[#111] border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#c9a227]/50">
           <option value="all">전체</option>
           {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
@@ -136,9 +136,9 @@ export default function NoticePage({ userId, parentId }: Props) {
 function NoticeCard({ notice, expanded, onToggle }: { notice: Notice; expanded: boolean; onToggle: () => void }) {
   return (
     <div onClick={onToggle}
-      className={`bg-slate-800 rounded-xl border transition-all cursor-pointer ${
-        notice.is_pinned ? 'border-yellow-500/40' : 'border-slate-700'
-      } ${expanded ? 'border-blue-500/50' : 'hover:border-slate-600'}`}>
+      className={`bg-[#0d0d0d] rounded-xl border transition-all cursor-pointer ${
+        notice.is_pinned ? 'border-[#c9a227]/30' : 'border-white/5'
+      } ${expanded ? 'border-[#c9a227]/50' : 'hover:border-white/10'}`}>
       <div className="flex items-center gap-3 p-4">
         {notice.is_pinned && <Pin className="w-4 h-4 text-yellow-400 shrink-0" />}
         <div className="flex-1 min-w-0">
@@ -160,7 +160,7 @@ function NoticeCard({ notice, expanded, onToggle }: { notice: Notice; expanded: 
         {expanded ? <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" /> : <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />}
       </div>
       {expanded && (
-        <div className="px-4 pb-4 border-t border-slate-700 pt-4">
+        <div className="px-4 pb-4 border-t border-white/5 pt-4">
           <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{notice.content}</p>
         </div>
       )}

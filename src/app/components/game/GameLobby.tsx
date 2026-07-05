@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { supabase } from '../../../lib/supabase';
 import CryptoJS from 'crypto-js';
 import GameLoginModal from './GameLogin';
+import GameSignupModal from './GameSignup';
 import { honorVendorService, aceVendorService, investVendorService, gameVendorService, deductVendorBalanceOnCharge } from '../../../utils/game-management';
 import DepositPage from './DepositPage';
 import WithdrawPage from './WithdrawPage';
@@ -97,19 +98,20 @@ const HEARTBEAT_INTERVAL = 30_000;
 const PROXY_URL = 'https://vi8282.com/proxy';
 export const ACTIVE_GAME_SESSION_KEY = 'benz_active_game_session';
 const BASE = 'https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino';
+const IMG_BASE = 'https://jlgvkwofxcyegcealbdr.supabase.co/storage/v1/object/public/image';
 
 const IMG = {
-  logo:         `${BASE}/images/Benz%20logo.png`,
-  heroBg:       `${BASE}/images/casino_background_1.png`,
-  bannerText:   `${BASE}/images/Banner-Text.png`,
-  casinoHeader: `${BASE}/images/Casino-game-list.png`,
-  slotHeader:   `${BASE}/images/Slot-game-list.png`,
-  bottomBanner: `${BASE}/images/Gaming_bottom.png`,
-  liveCasinoBg: `${BASE}/images/live_casino_bg.png`,
-  slotBg:       `${BASE}/images/slot_game_bg.png`,
-  menuBg:       `${BASE}/images/Menu-bg.png`,
-  menuLine:     `${BASE}/images/Menu-line.png`,
-  menuItem:     `${BASE}/images/Menu.png`,
+  logo:         'https://jlgvkwofxcyegcealbdr.supabase.co/storage/v1/object/public/image/Benz%20logo.png',
+  heroBg:       `${IMG_BASE}/casino_background_2.png`,
+  bannerText:   `${IMG_BASE}/Banner-Text.png`,
+  casinoHeader: `${IMG_BASE}/Casino-game-list.png`,
+  slotHeader:   `${IMG_BASE}/Slot-game-list.png`,
+  bottomBanner: `${IMG_BASE}/Gaming_bottom.png`,
+  liveCasinoBg: `${IMG_BASE}/live_casino_bg_new.png`,
+  slotBg:       `${IMG_BASE}/slot_game_bg.png`,
+  menuBg:       `${IMG_BASE}/Menu-bg.png`,
+  menuLine:     `${IMG_BASE}/Menu-line.png`,
+  menuItem:     `${IMG_BASE}/Menu.png`,
 };
 
 
@@ -183,10 +185,10 @@ function PlayNowButton({ onClick }: { onClick: () => void }) {
       onMouseLeave={() => setHovered(false)}
       style={{
         position: 'absolute',
-        left: 87,
-        top: '66.6%',
-        width: '225px',
-        height: '48px',
+        left: 92,
+        top: '73.5%',
+        width: '253px',
+        height: '52.5px',
         border: '0px solid #c9a227',
         background: hovered ? '#c9a227' : 'transparent',
         color: hovered ? '#000' : 'transparent',
@@ -289,6 +291,7 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
   const [launchingGameId, setLaunchingGameId] = useState<string | null>(null);
   const [launchModal, setLaunchModal] = useState<LaunchModal | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showSignupModal, setShowSignupModal] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeMenu, setActiveMenu] = useState<string>('');
@@ -1149,9 +1152,12 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}
         style={{
-          background: 'linear-gradient(180deg, #0a0a0a 0%, #0c0900 55%, #100c00 100%)',
+          backgroundImage: `url(${IMG.menuBg})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center top',
+          backgroundRepeat: 'no-repeat',
           borderRight: '1px solid rgba(201,162,39,0.14)',
-          boxShadow: 'inset -1px 0 0 rgba(201,162,39,0.06), 4px 0 24px rgba(0,0,0,0.6)',
+          boxShadow: '4px 0 24px rgba(0,0,0,0.6)',
         }}
       >
         {/* Logo */}
@@ -1163,8 +1169,8 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
             <img
               src={IMG.logo}
               alt="BENZ CASINO"
-              className="h-16 w-auto object-contain hover:opacity-80 transition-opacity"
-              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              className="h-16 w-auto object-contain"
+              onError={e => { (e.target as HTMLImageElement).src = ''; (e.target as HTMLImageElement).alt = 'BENZ CASINO'; }}
             />
           </button>
         </div>
@@ -1178,19 +1184,24 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
             return (
               <div key={id}>
                 {showDivider && (
-                  <div className="my-2 h-px bg-gradient-to-r from-transparent via-[#c9a227]/30 to-transparent" />
+                  <div className="my-2 h-[14px] w-full" />
                 )}
                 <button
                   onClick={() => handleSectionChange(id)}
                   className={`relative w-full flex items-center gap-3 px-3 py-[11px] mb-1.5 rounded-md transition-all duration-200 group border ${isActive ? 'border-[#c9a227]/70' : 'border-transparent'}`}
+                  style={isActive ? {
+                    backgroundImage: `url(${IMG.menuItem})`,
+                    backgroundSize: '100% 100%',
+                    backgroundRepeat: 'no-repeat',
+                  } : undefined}
                 >
                   <Icon
                     size={18}
-                    className={`shrink-0 transition-colors ${isActive ? 'text-[#c9a227]' : 'text-slate-500 group-hover:text-[#c9a227]/70'}`}
+                    className={`shrink-0 transition-colors ${isActive ? 'text-[#c9a227]' : 'text-slate-400 group-hover:text-[#c9a227]/70'}`}
                   />
                   <span
                     className={`flex-1 text-left text-[17px] font-semibold tracking-wide transition-colors ${
-                      isActive ? 'text-[#c9a227]' : 'text-slate-400 group-hover:text-[#c9a227]/80'
+                      isActive ? 'text-[#c9a227]' : 'text-slate-300 group-hover:text-[#c9a227]/80'
                     }`}
                   >
                     {label}
@@ -1203,7 +1214,7 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
                   {hasArrow && (
                     <ChevronDown
                       size={14}
-                      className={`shrink-0 transition-colors ${isActive ? 'text-[#c9a227]' : 'text-slate-600 group-hover:text-[#c9a227]/60'}`}
+                      className={`shrink-0 transition-colors ${isActive ? 'text-[#c9a227]' : 'text-slate-500 group-hover:text-[#c9a227]/60'}`}
                     />
                   )}
                 </button>
@@ -1238,19 +1249,15 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
             {user && (
               <>
                 <button
-                  onClick={handleConvertPointsInHeader}
-                  disabled={convertingPoints || localPoints <= 0}
-                  title="클릭하여 포인트를 보유금으로 전환"
-                  className="hidden sm:flex items-center gap-2 text-base text-slate-400 bg-[#111]/60 px-4 py-2 rounded-full border border-[#c9a227]/15 hover:border-[#c9a227]/40 transition-colors disabled:cursor-default disabled:hover:border-[#c9a227]/15 group"
+                  onClick={() => handleSectionChange('point')}
+                  title="포인트 페이지로 이동"
+                  className="hidden sm:flex items-center gap-2 text-base text-slate-400 bg-[#111]/60 px-4 py-2 rounded-full border border-[#c9a227]/15 hover:border-[#c9a227]/40 transition-colors group"
                 >
                   <Star size={14} className="text-[#c9a227]/60 group-hover:text-[#c9a227] transition-colors" />
                   <span>포인트</span>
                   <span className="text-[#c9a227] font-semibold ml-1">
-                    {convertingPoints ? '...' : localPoints.toLocaleString()}P
+                    {localPoints.toLocaleString()}P
                   </span>
-                  {localPoints > 0 && (
-                    <ArrowRightLeft size={12} className="text-slate-600 group-hover:text-[#c9a227] transition-colors" />
-                  )}
                 </button>
                 <div className="flex items-center gap-2 text-base bg-[#111]/60 px-4 py-2 rounded-full border border-[#c9a227]/20">
                   <Wallet size={15} className="text-[#c9a227]" />
@@ -1805,8 +1812,14 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
         open={showLoginModal}
         onLogin={handleLogin}
         onClose={() => setShowLoginModal(false)}
-        onSwitchToSignup={() => { setShowLoginModal(false); onSignup(); }}
+        onSwitchToSignup={() => { setShowLoginModal(false); setShowSignupModal(true); }}
         isLoading={loginLoading}
+      />
+
+      <GameSignupModal
+        open={showSignupModal}
+        onClose={() => setShowSignupModal(false)}
+        onSwitchToLogin={() => { setShowSignupModal(false); setShowLoginModal(true); }}
       />
     </div>
   );

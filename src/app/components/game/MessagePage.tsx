@@ -72,8 +72,8 @@ export default function MessagePage({ userId, onUnreadCountChange }: Props) {
           className="flex items-center gap-2 text-slate-400 hover:text-white text-sm mb-4 transition-colors">
           <ArrowLeft className="w-4 h-4" /> 쪽지함으로 돌아가기
         </button>
-        <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-          <div className="p-5 border-b border-slate-700">
+        <div className="bg-[#0d0d0d] rounded-xl border border-white/5 overflow-hidden">
+          <div className="p-5 border-b border-white/5">
             <h3 className="text-white font-bold text-lg mb-2">{selected.title}</h3>
             <div className="flex gap-4 text-sm text-slate-400">
               <span>보낸 사람: <span className="text-slate-300">{selected.sender_name}</span></span>
@@ -104,14 +104,14 @@ export default function MessagePage({ userId, onUnreadCountChange }: Props) {
       </div>
 
       {/* 필터 탭 */}
-      <div className="flex gap-1 bg-slate-800/50 rounded-lg p-1 mb-4 w-fit">
+      <div className="flex gap-1 bg-[#111]/60 rounded-lg p-1 mb-4 w-fit">
         {[
           { key: 'all', label: `전체 (${messages.length})` },
           { key: 'unread', label: `읽지 않음 (${unreadCount})` },
         ].map(tab => (
           <button key={tab.key} onClick={() => setFilter(tab.key as any)}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-              filter === tab.key ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+              filter === tab.key ? 'bg-[#c9a227] text-black' : 'text-slate-400 hover:text-white'
             }`}>
             {tab.label}
           </button>
@@ -129,12 +129,12 @@ export default function MessagePage({ userId, onUnreadCountChange }: Props) {
         <div className="space-y-2">
           {filtered.map(msg => (
             <div key={msg.id} onClick={() => openMessage(msg)}
-              className={`bg-slate-800 rounded-xl border p-4 cursor-pointer transition-all flex gap-3 items-start ${
+              className={`bg-[#0d0d0d] rounded-xl border p-4 cursor-pointer transition-all flex gap-3 items-start ${
                 !msg.is_read
-                  ? 'border-blue-500/40 hover:border-blue-500/60'
-                  : 'border-slate-700 hover:border-slate-600'
+                  ? 'border-[#c9a227]/30 hover:border-[#c9a227]/50'
+                  : 'border-white/5 hover:border-white/10'
               }`}>
-              <div className={`mt-0.5 shrink-0 ${!msg.is_read ? 'text-blue-400' : 'text-slate-500'}`}>
+              <div className={`mt-0.5 shrink-0 ${!msg.is_read ? 'text-[#c9a227]' : 'text-slate-500'}`}>
                 {msg.is_read ? <MailOpen className="w-5 h-5" /> : <Mail className="w-5 h-5" />}
               </div>
               <div className="flex-1 min-w-0">
@@ -147,7 +147,7 @@ export default function MessagePage({ userId, onUnreadCountChange }: Props) {
                 <div className="flex justify-between items-center mt-1">
                   <span className="text-xs text-slate-500">{msg.sender_name}</span>
                   {!msg.is_read && (
-                    <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                    <span className="w-2 h-2 bg-[#c9a227] rounded-full"></span>
                   )}
                 </div>
                 <p className="text-xs text-slate-500 mt-1 truncate">{msg.content}</p>

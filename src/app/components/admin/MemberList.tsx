@@ -224,6 +224,7 @@ function MemberDetailDrawer({
 
   // 정보수정 state
   const [editName, setEditName] = useState(member.name ?? '');
+  const [editPhone, setEditPhone] = useState(member.phone ?? '');
   const [editBankName, setEditBankName] = useState(member.metadata?.bank_name ?? '');
   const [editBankAccount, setEditBankAccount] = useState(member.metadata?.bank_account ?? '');
   const [newMemo, setNewMemo] = useState('');
@@ -414,6 +415,7 @@ function MemberDetailDrawer({
       // 기본 정보 업데이트
       const { error: userErr } = await supabase.from('users').update({
         name: editName.trim() || null,
+        phone: editPhone.trim() || null,
         metadata: {
           ...(member.metadata ?? {}),
           bank_name: editBankName.trim() || '',
@@ -442,6 +444,7 @@ function MemberDetailDrawer({
       onMemberUpdated({
         ...member,
         name: editName.trim() || null,
+        phone: editPhone.trim() || null,
         metadata: {
           ...(member.metadata ?? {}),
           bank_name: editBankName.trim() || '',
@@ -547,7 +550,8 @@ function MemberDetailDrawer({
               <div className="grid grid-cols-2 gap-3">
                 {[
                   ['아이디', member.username],
-                  ['닉네임', member.name || '-'],
+                  ['이름', member.name || '-'],
+                  ['연락처', member.phone || '-'],
                   ['상태', member.status === 'active' ? '활성' : (STATUS_MAP[member.status]?.label ?? member.status)],
                   ['접속', member.status === 'active' ? (isOnline(member) ? '온라인' : '오프라인') : '-'],
                   ['보유금', `₩${Number(member.balance ?? 0).toLocaleString()}`],
@@ -601,10 +605,17 @@ function MemberDetailDrawer({
           {tab === 'edit' && (
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-xs text-slate-400 mb-1.5">닉네임</label>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">이름</label>
                   <input value={editName} onChange={e => setEditName(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-blue-500" />
+                    placeholder="실명"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm placeholder:text-slate-600 focus:outline-none focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">연락처</label>
+                  <input value={editPhone} onChange={e => setEditPhone(e.target.value)}
+                    placeholder="01012345678"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm placeholder:text-slate-600 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1.5">은행명</label>
@@ -918,7 +929,7 @@ function MemberDetailDrawer({
 // ─── Default form ─────────────────────────────────────────────────────────────
 
 const DEFAULT_FORM = {
-  username: '', nickname: '', password: '', passwordConfirm: '',
+  username: '', nickname: '', phone: '', password: '', passwordConfirm: '',
   parentId: '', bankName: '', bankAccount: '',
   casinoRolling: '0.0', slotRolling: '0.0', losingRate: '0.0', notes: '',
 };
@@ -1056,7 +1067,7 @@ export default function MemberList() {
     try {
       let query = supabase
         .from('users')
-        .select('id, username, name, notes, role, status, is_online, last_heartbeat_at, balance, points, created_at, last_login_at, hierarchy_path, parent_id, metadata, parent:parent_id(username, name, role)', { count: 'exact' })
+        .select('id, username, name, phone, notes, role, status, is_online, last_heartbeat_at, balance, points, created_at, last_login_at, hierarchy_path, parent_id, metadata, parent:parent_id(username, name, role)', { count: 'exact' })
         .eq('role', 'member')
         .neq('status', 'blocked')
         .order('created_at', { ascending: false })
@@ -1280,6 +1291,10 @@ export default function MemberList() {
           toast.error('회원 생성 실패: ' + error.message);
         }
         return;
+      }
+      // phone은 RPC에 없으므로 별도 업데이트
+      if (form.phone.trim()) {
+        await supabase.from('users').update({ phone: form.phone.trim() }).eq('username', form.username.trim()).eq('role', 'member');
       }
       toast.success(`회원 "${form.username}"이(가) 생성되었습니다.`);
       setShowCreateModal(false);
@@ -1510,7 +1525,10 @@ export default function MemberList() {
               <thead>
                 <tr className="bg-slate-700/50">
                   <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">아이디</th>
-                  <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">닉네임</th>
+                  <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">이름</th>
+                  <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">연락처</th>
+                  <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">은행명</th>
+                  <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">계좌번호</th>
                   <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">소속 파트너</th>
                   <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">보유금</th>
                   <th className="px-4 py-4 text-left text-sm font-medium text-slate-300 whitespace-nowrap">포인트</th>
@@ -1531,6 +1549,9 @@ export default function MemberList() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-200">{member.name || '-'}</td>
+                    <td className="px-4 py-3 text-sm text-slate-400 font-mono whitespace-nowrap">{member.phone || '-'}</td>
+                    <td className="px-4 py-3 text-sm text-slate-400 whitespace-nowrap">{member.metadata?.bank_name || '-'}</td>
+                    <td className="px-4 py-3 text-sm text-slate-400 font-mono whitespace-nowrap">{member.metadata?.bank_account || '-'}</td>
                     <td className="px-4 py-3 text-sm text-slate-400 whitespace-nowrap">
                       {member.parent ? (
                         <div className="flex flex-col gap-0.5">
@@ -1598,7 +1619,7 @@ export default function MemberList() {
                 ))}
                 {displayMembers.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="px-6 py-10 text-center text-slate-500">표시할 회원이 없습니다</td>
+                    <td colSpan={11} className="px-6 py-10 text-center text-slate-500">표시할 회원이 없습니다</td>
                   </tr>
                 )}
               </tbody>
@@ -1803,8 +1824,13 @@ export default function MemberList() {
                             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm placeholder:text-slate-600 focus:outline-none focus:border-blue-500" />
                         </div>
                         <div>
-                          <label className="block text-xs text-slate-400 mb-1.5">닉네임</label>
-                          <input value={form.nickname} onChange={e => setForm(f => ({ ...f, nickname: e.target.value }))} placeholder="선택 사항"
+                          <label className="block text-xs text-slate-400 mb-1.5">이름</label>
+                          <input value={form.nickname} onChange={e => setForm(f => ({ ...f, nickname: e.target.value }))} placeholder="실명 (선택)"
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm placeholder:text-slate-600 focus:outline-none focus:border-blue-500" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1.5">연락처</label>
+                          <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="01012345678 (선택)"
                             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm placeholder:text-slate-600 focus:outline-none focus:border-blue-500" />
                         </div>
                         <div>

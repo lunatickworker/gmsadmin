@@ -13,6 +13,7 @@ function generateCaptcha(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
+// ─── Main Login Modal ─────────────────────────────────────────────────────────
 export default function GameLoginModal({
   open,
   onLogin,
@@ -32,7 +33,9 @@ export default function GameLoginModal({
   }, []);
 
   useEffect(() => {
-    if (open) refreshCaptcha();
+    if (open) {
+      refreshCaptcha();
+    }
   }, [open, refreshCaptcha]);
 
   if (!open) return null;
@@ -42,6 +45,7 @@ export default function GameLoginModal({
     if (!username.trim() || !password) return;
     if (captchaAnswer !== captchaCode) {
       refreshCaptcha();
+      toast.error('보안코드가 일치하지 않습니다');
       return;
     }
     setSubmitting(true);
@@ -59,27 +63,37 @@ export default function GameLoginModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
         onClick={onClose}
       />
 
       {/* modal */}
-      <div className="relative z-10 w-full max-w-[360px] mx-4 bg-[#1a1a1a] border border-[#3a3020] rounded shadow-2xl overflow-hidden">
-        {/* title bar */}
-        <div className="flex items-center justify-between bg-[#111] border-b border-[#2a2010] px-5 py-3">
-          <span className="text-white font-semibold tracking-wide">로그인</span>
+      <div className="relative z-10 w-full max-w-[380px] mx-4 bg-[#1a1a1a] border border-[#3a3020] rounded-lg shadow-2xl overflow-hidden">
+
+        {/* ── Logo Banner ─────────────────────────────────────── */}
+        <div className="relative bg-[#0d0d0d] pt-6 pb-5 flex flex-col items-center border-b border-[#2a2010]">
+          <img
+            src="https://jlgvkwofxcyegcealbdr.supabase.co/storage/v1/object/public/image/Benz%20logo.png"
+            alt="BENZ CASINO"
+            className="h-20 w-auto object-contain"
+          />
           {onClose && (
             <button
               onClick={onClose}
-              className="text-slate-500 hover:text-white transition-colors"
+              className="absolute top-3 right-3 text-slate-600 hover:text-white transition-colors"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           )}
         </div>
 
-        {/* form */}
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-3">
+        {/* ── Title bar ───────────────────────────────────────── */}
+        <div className="flex items-center bg-[#111] border-b border-[#2a2010] px-5 py-2.5">
+          <span className="text-white/80 text-sm font-medium tracking-wide">로그인</span>
+        </div>
+
+        {/* ── Content ─────────────────────────────────────────── */}
+        <form onSubmit={handleSubmit} className="px-5 py-5 space-y-3">
           {/* ID */}
           <input
             type="text"
@@ -104,9 +118,9 @@ export default function GameLoginModal({
 
           {/* Captcha */}
           <div className="flex items-center gap-2">
-            <div className="flex items-center justify-center w-24 h-10 rounded bg-[#0d0d0d] border border-[#333] select-none">
+            <div className="flex items-center justify-center w-20 h-10 rounded bg-[#0d0d0d] border border-[#333] select-none shrink-0">
               <span
-                className="font-mono font-bold tracking-[0.25em] text-[#c9a227]"
+                className="font-mono font-bold text-[#c9a227]"
                 style={{ fontStyle: 'italic', letterSpacing: '0.2em' }}
               >
                 {captchaCode}
@@ -120,15 +134,15 @@ export default function GameLoginModal({
               onChange={(e) => setCaptchaAnswer(e.target.value.replace(/\D/g, ''))}
               placeholder="숫자 입력"
               disabled={busy}
-              className="flex-1 h-10 bg-[#111] border border-[#333] rounded px-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-[#c9a227] transition-colors"
+              className="flex-1 min-w-0 h-10 bg-[#111] border border-[#333] rounded px-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-[#c9a227] transition-colors"
             />
             <button
               type="button"
               onClick={refreshCaptcha}
               disabled={busy}
-              className="w-10 h-10 flex items-center justify-center rounded border border-[#333] text-slate-500 hover:text-white hover:border-[#c9a227] transition-colors shrink-0"
+              className="w-9 h-10 flex items-center justify-center rounded border border-[#333] text-slate-500 hover:text-white hover:border-[#c9a227] transition-colors shrink-0"
             >
-              <RefreshCw size={14} />
+              <RefreshCw size={13} />
             </button>
           </div>
 
@@ -141,17 +155,16 @@ export default function GameLoginModal({
             {busy ? '로그인 중...' : '로그인'}
           </button>
 
-          {/* Links */}
-          <div className="flex items-center justify-between pt-1 text-xs text-slate-500">
-            <div className="flex items-center gap-2">
-              <button type="button" className="hover:text-slate-300 transition-colors">아이디 찾기</button>
-              <span className="text-slate-700">|</span>
-              <button type="button" className="hover:text-slate-300 transition-colors">비밀번호 찾기</button>
-            </div>
+          {/* Footer */}
+          <div className="flex items-center justify-between pt-1">
+            <p className="text-[11px] text-slate-600">
+              계정 문의는{' '}
+              <span className="text-slate-500">고객센터</span>를 이용해주세요
+            </p>
             <button
               type="button"
               onClick={onSwitchToSignup}
-              className="text-[#c9a227] hover:text-[#d4b030] transition-colors"
+              className="text-xs text-[#c9a227] hover:text-[#d4b030] transition-colors"
             >
               회원가입
             </button>

@@ -1242,7 +1242,7 @@ app.post("/make-server-cd65d9bc/auth/signup", async (c) => {
     const updateData: any = { status: "inactive", updated_at: new Date().toISOString() };
     if (phone) updateData.phone = phone;
     if (bank_name || account_number) {
-      updateData.metadata = { bank_info: { bank_name: bank_name || "", account_number: account_number || "" } };
+      updateData.metadata = { bank_name: bank_name || "", bank_account: account_number || "" };
     }
     await sb.from("users").update(updateData).eq("id", userId);
 

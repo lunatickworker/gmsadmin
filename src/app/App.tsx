@@ -381,26 +381,13 @@ function ComingSoon() {
 }
 
 export default function App() {
-  const isAdminHost =
-    window.location.hostname === "gmsadmin.vercel.app";
-
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {isAdminHost ? (
-            <>
-              <Route path="/" element={<Navigate to="/admin" replace />} />
-              <Route path="/admin/*" element={<AdminLayout />} />
-            </>
-          ) : (
-            <>
-              <Route path="/admin/*" element={<AdminLayout />} />
-              <Route path="/*" element={<GameLayout />} />
-            </>
-          )}
+          <Route path="/admin/*" element={<AdminLayout />} />
+          <Route path="/*" element={<GameLayout />} />
         </Routes>
-
         <Toaster />
       </BrowserRouter>
     </AuthProvider>
