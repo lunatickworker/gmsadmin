@@ -4,6 +4,11 @@
       "source": "/admin",
       "destination": "https://gmsadmin.vercel.app",
       "permanent": false
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "https://gmsadmin.vercel.app/:path*",
+      "permanent": false
     }
   ],
   "rewrites": [
