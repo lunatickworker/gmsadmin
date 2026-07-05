@@ -1,9 +1,12 @@
 {
-  "rewrites": [
+  "redirects": [
     {
-      "source": "/admin/(.*)",
-      "destination": "/index.html"
-    },
+      "source": "/admin",
+      "destination": "https://gmsadmin.vercel.app",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
     {
       "source": "/(.*)",
       "destination": "/index.html"
