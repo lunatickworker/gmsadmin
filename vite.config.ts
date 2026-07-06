@@ -1,5 +1,9 @@
 import { defineConfig } from 'vite'
-import path from 'path'
+// Use a require with an any cast to avoid needing @types/node in strict TS setups
+declare const require: any
+declare const process: { cwd(): string }
+const path: any = require('path')
+const rootDir = process.cwd()
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
@@ -7,10 +11,10 @@ import react from '@vitejs/plugin-react'
 function figmaAssetResolver() {
   return {
     name: 'figma-asset-resolver',
-    resolveId(id) {
+    resolveId(id: string) {
       if (id.startsWith('figma:asset/')) {
         const filename = id.replace('figma:asset/', '')
-        return path.resolve(__dirname, 'src/assets', filename)
+        return path.resolve(rootDir, 'src/assets', filename)
       }
     },
   }
@@ -28,7 +32,7 @@ export default defineConfig({
   resolve: {
     alias: {
       // Alias @ to the src directory
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(rootDir, './src'),
     },
   },
 
