@@ -1,7 +1,7 @@
 import CryptoJS from 'crypto-js';
 import { supabase } from '../lib/supabase';
 
-const PROXY_URL = 'https://vi8282.com/proxy';
+const PROXY_URL = 'https://proxy.gms0811.com/proxy';
 
 // ─── Proxy 호출 헬퍼 ───────────────────────────────────────────
 
@@ -491,7 +491,7 @@ export const gameItemService = {
 // ============================================================
 // Honor API 서비스
 // 인증: Authorization: Bearer {secret_key} (game_vendors.secret_key)
-// Proxy: vi8282.com/proxy → api.honorlink.org/ap
+// Proxy: proxy.gms0811.com/proxy → api.honorlink.org/ap
 // md5/signature 없음 — Bearer 토큰만으로 에이전트 구별
 // ============================================================
 
@@ -862,7 +862,7 @@ export const honorVendorService = {
 // ACE API 서비스
 // 인증: agent + hash (SHA-256 Base64) in 요청 헤더
 // Content-Type: application/x-www-form-urlencoded
-// Proxy: vi8282.com/proxy를 통해 gate.st88-ace.com 호출
+// Proxy: proxy.gms0811.com/proxy를 통해 gate.st88-ace.com 호출
 // ============================================================
 
 function sha256Base64(body: Record<string, any> | null, secretKey: string): string {

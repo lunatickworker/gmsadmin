@@ -1,12 +1,12 @@
 // INVEST 게임사 API 클라이언트
 // API 스펙: https://api.invest-ho.com
 // Signature: tolower( md5( ...fields + secret_key ) )
-// Proxy: https://vi8282.com/proxy (모든 API 문서 공통)
+// Proxy: https://proxy.gms0811.com/proxy (모든 API 문서 공통)
 
 import { crypto as stdCrypto } from "jsr:@std/crypto";
 import { encodeHex } from "jsr:@std/encoding/hex";
 
-const PROXY_URL = "https://vi8282.com/proxy";
+const PROXY_URL = "https://proxy.gms0811.com/proxy";
 
 // MD5 해시 생성 — Web Crypto는 MD5 미지원, @std/crypto 사용
 async function md5Hex(input: string): Promise<string> {
@@ -74,7 +74,7 @@ export class InvestApiClient {
     this.baseUrl = (baseUrl ?? "https://api.invest-ho.com").replace(/\/$/, "");
   }
 
-  // 모든 요청은 vi8282.com/proxy를 통해 전달
+  // 모든 요청은 proxy.gms0811.com/proxy를 통해 전달
   private async request<T>(
     endpoint: string,
     method: string,

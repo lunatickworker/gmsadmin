@@ -209,7 +209,7 @@ class InvestProviderService {
         requestBody.provider_code = provider.api_secret;
       }
 
-      const response = await fetch("https://vi8282.com/proxy", {
+      const response = await fetch("https://proxy.gms0811.com/proxy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -271,7 +271,7 @@ class InvestProviderService {
         requestBody.language = options?.language || 'ko';
       }
 
-      const response = await fetch("https://vi8282.com/proxy", {
+      const response = await fetch("https://proxy.gms0811.com/proxy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -308,7 +308,7 @@ class InvestProviderService {
         requestBody.provider_code = provider.api_secret;
       }
 
-      const response = await fetch("https://vi8282.com/proxy", {
+      const response = await fetch("https://proxy.gms0811.com/proxy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -375,7 +375,7 @@ class HonorProviderService {
       },
     };
 
-    const res = await fetch("https://vi8282.com/proxy", {
+    const res = await fetch("https://proxy.gms0811.com/proxy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(proxyBody),
@@ -751,7 +751,7 @@ app.get("/make-server-cd65d9bc/users/:id/honor-balance", async (c) => {
     if (vendorErr || !vendor) return c.json({ error: "honor 벤더 설정을 찾을 수 없습니다." }, 404);
 
     // /my-info 호출 → 에이전트 잔액(보유금) 조회
-    const proxyRes = await fetch("https://vi8282.com/proxy", {
+    const proxyRes = await fetch("https://proxy.gms0811.com/proxy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

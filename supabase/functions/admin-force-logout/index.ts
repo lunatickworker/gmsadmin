@@ -4,7 +4,7 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
 
-const PROXY_URL = "https://vi8282.com/proxy";
+const PROXY_URL = "https://proxy.gms0811.com/proxy";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

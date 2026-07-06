@@ -95,7 +95,7 @@ interface ActiveSession {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HEARTBEAT_INTERVAL = 30_000;
-const PROXY_URL = 'https://vi8282.com/proxy';
+const PROXY_URL = 'https://proxy.gms0811.com/proxy';
 export const ACTIVE_GAME_SESSION_KEY = 'benz_active_game_session';
 const BASE = 'https://iqkgwsdgxmxxvpydrlrm.supabase.co/storage/v1/object/public/casino';
 const IMG_BASE = 'https://jlgvkwofxcyegcealbdr.supabase.co/storage/v1/object/public/image';

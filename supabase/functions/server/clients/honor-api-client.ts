@@ -1,9 +1,9 @@
 // HONOR 게임사 API 클라이언트
 // Endpoint: https://api.honorlink.org/ap
 // Auth: Authorization: Bearer {secret_key} (game_vendors.secret_key)
-// Proxy: https://vi8282.com/proxy
+// Proxy: https://proxy.gms0811.com/proxy
 
-const PROXY_URL = "https://vi8282.com/proxy";
+const PROXY_URL = "https://proxy.gms0811.com/proxy";
 
 export interface HonorMyInfoResponse {
   id: number;

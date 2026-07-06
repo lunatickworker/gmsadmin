@@ -2,9 +2,9 @@
 // Endpoint: gate.st88-ace.com (api_base_url from game_vendors)
 // Auth: agent(=opcode) + hash(SHA-256 Base64) in 요청 헤더
 // Content-Type: application/x-www-form-urlencoded
-// Proxy: https://vi8282.com/proxy (모든 API 문서 공통)
+// Proxy: https://proxy.gms0811.com/proxy (모든 API 문서 공통)
 
-const PROXY_URL = "https://vi8282.com/proxy";
+const PROXY_URL = "https://proxy.gms0811.com/proxy";
 
 // SHA-256 Base64 해시 생성 (Deno Web Crypto API 사용)
 // hash = Base64( SHA-256( JSON.stringify(body) + secretKey ) )
@@ -112,7 +112,7 @@ export class AceApiClient {
     this.apiBaseUrl = apiBaseUrl.replace(/\/$/, "");
   }
 
-  // 모든 요청은 vi8282.com/proxy를 통해 전달
+  // 모든 요청은 proxy.gms0811.com/proxy를 통해 전달
   // ACE: POST, Content-Type: application/x-www-form-urlencoded, agent+hash 헤더
   private async request<T extends AceBaseResponse>(
     endpoint: string,

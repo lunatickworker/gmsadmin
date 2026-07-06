@@ -4,7 +4,7 @@ import { Gamepad2, Play, Grid3x3, List } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import CryptoJS from 'crypto-js';
 
-const PROXY_URL = 'https://vi8282.com/proxy';
+const PROXY_URL = 'https://proxy.gms0811.com/proxy';
 
 function md5(...parts: (string | number)[]): string {
   return CryptoJS.MD5(parts.join('')).toString().toLowerCase();
