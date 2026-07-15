@@ -5,17 +5,24 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Loader2, RefreshCw, FileText, X, Copy, Check, Info, Calendar as CalendarIcon } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
-import { aceVendorService, type GameVendor } from '../../../utils/game-management';
+import { aceVendorService, honorVendorService, type GameVendor } from '../../../utils/game-management';
 import { toast } from 'sonner';
 import { Calendar } from '../ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { format, startOfDay, endOfDay, subDays } from 'date-fns';
+import { useAuth } from '../../context/AuthContext';
 
 interface BetRow {
   id: string;
   txid: string;
   round_id: string | null;
   username: string;
+  user_id: string;
+  store_id: string | null;
+  distributor_id: string | null;
+  sub_office_id: string | null;
+  head_office_id: string | null;
+  operator_id: string | null;
   provider_name: string;
   game_name: string;
   game_type: string | null;
@@ -26,6 +33,8 @@ interface BetRow {
   round_status: string | null;
   bet_time: string | null;
   settle_time: string | null;
+  before_amount: number | null;
+  after_amount: number | null;
   is_bonus: boolean;
   is_jackpot: boolean;
   api_type: 'invest' | 'honor' | 'ace';
@@ -38,6 +47,14 @@ interface MergedRound {
   txid: string;
   round_id: string | null;
   username: string;
+  user_id: string;
+  store_id: string | null;
+  distributor_id: string | null;
+  sub_office_id: string | null;
+  head_office_id: string | null;
+  operator_id: string | null;
+  parentId: string | null;
+  storeName: string | null;
   provider_name: string;
   game_name: string;
   game_type: string | null;
@@ -48,6 +65,8 @@ interface MergedRound {
   round_status: string | null;
   bet_time: string | null;
   settle_time: string | null;
+  before_amount: number | null;
+  after_amount: number | null;
   is_bonus: boolean;
   is_jackpot: boolean;
   api_type: 'invest' | 'honor' | 'ace';
@@ -75,14 +94,53 @@ function mergeRounds(rawRows: BetRow[]): MergedRound[] {
     const { bet, settle, primary } = g;
     const betRaw    = (bet?.raw_data    ?? {}) as Record<string, unknown>;
     const settleRaw = (settle?.raw_data ?? {}) as Record<string, unknown>;
-    const bet_amount = bet    ? Number(bet.bet_amount)    : 0;
+    // bet 행이 없으면 settle 또는 primary에서 bet_amount 가져오기
+    const bet_amount = Number(bet?.bet_amount ?? settle?.bet_amount ?? primary.bet_amount ?? 0);
     const win_amount = settle ? Number(settle.win_amount) : 0;
+
+    // honor: DB 컬럼 우선, 없으면 raw_data.before / before+amount 로 fallback
+    // ace/invest: raw_data의 beforeCash/afterCash 사용
+    const isHonor = primary.api_type === 'honor';
+    let beforeCash: number | null = null;
+    if (isHonor) {
+      const srcBefore = bet ?? settle ?? primary;
+      const srcBeforeRaw = srcBefore.raw_data ?? {};
+      beforeCash = srcBefore.before_amount != null
+        ? Number(srcBefore.before_amount)
+        : (srcBeforeRaw.before != null ? Number(srcBeforeRaw.before) : null);
+    } else {
+      beforeCash = (betRaw.beforeCash ?? settleRaw.beforeCash ?? null) as number | null;
+    }
+    // afterCash = beforeCash + (win - bet): API가 반환하는 after 값은 베팅 차감 후 잔액이므로
+    // 실제 정산 후 잔액을 직접 계산한다
+    const afterCash: number | null = beforeCash !== null
+      ? beforeCash + (win_amount - bet_amount)
+      : null;
+
+    // user_id와 다른 첫 번째 계층 ID = 직속 소속파트너(상위)
+    const uid = primary.user_id;
+    const parentId =
+      (primary.store_id       && primary.store_id       !== uid ? primary.store_id       : null) ??
+      (primary.distributor_id && primary.distributor_id !== uid ? primary.distributor_id : null) ??
+      (primary.sub_office_id  && primary.sub_office_id  !== uid ? primary.sub_office_id  : null) ??
+      (primary.head_office_id && primary.head_office_id !== uid ? primary.head_office_id : null) ??
+      (primary.operator_id    && primary.operator_id    !== uid ? primary.operator_id    : null) ??
+      null;
+
     merged.push({
       key,
       id: primary.id,
       txid: primary.txid,
       round_id: primary.round_id,
       username: primary.username,
+      user_id: primary.user_id,
+      store_id: primary.store_id ?? null,
+      distributor_id: primary.distributor_id ?? null,
+      sub_office_id: primary.sub_office_id ?? null,
+      head_office_id: primary.head_office_id ?? null,
+      operator_id: primary.operator_id ?? null,
+      parentId,
+      storeName: null,
       provider_name: primary.provider_name,
       game_name: primary.game_name,
       game_type: primary.game_type,
@@ -93,11 +151,13 @@ function mergeRounds(rawRows: BetRow[]): MergedRound[] {
       round_status: settle?.round_status ?? bet?.round_status ?? null,
       bet_time: bet?.bet_time ?? primary.bet_time,
       settle_time: settle?.settle_time ?? null,
+      before_amount: bet?.before_amount ?? null,
+      after_amount: settle?.after_amount ?? bet?.after_amount ?? null,
       is_bonus: primary.is_bonus,
       is_jackpot: primary.is_jackpot,
       api_type: primary.api_type,
-      beforeCash: (betRaw.beforeCash ?? settleRaw.beforeCash ?? null) as number | null,
-      afterCash:  (settleRaw.afterCash ?? betRaw.afterCash ?? null) as number | null,
+      beforeCash,
+      afterCash,
       raw_data: settle?.raw_data ?? bet?.raw_data ?? null,
     });
   }
@@ -114,7 +174,18 @@ const VENDOR_TABLE_MAP: Record<string, string> = {
   ace:    'betting_history_ace',
 };
 
-const PAGE_SIZE = 50;
+// 각 벤더 테이블의 실제 컬럼 차이를 반영한 SELECT 문
+// betting_history_invest: game_category, is_bonus, is_jackpot 없음
+// betting_history_honor:  is_bonus, is_jackpot 없음
+// betting_history_ace:    모든 컬럼 있음
+const HIERARCHY_COLS = 'user_id, store_id, distributor_id, sub_office_id, head_office_id, operator_id';
+const VENDOR_SELECT_MAP: Record<string, string> = {
+  invest: `id, txid, round_id, username, ${HIERARCHY_COLS}, provider_name, game_name, game_type, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, raw_data`,
+  honor:  `id, txid, round_id, username, ${HIERARCHY_COLS}, provider_name, game_name, game_type, game_category, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, before_amount, after_amount, raw_data`,
+  ace:    `id, txid, round_id, username, ${HIERARCHY_COLS}, provider_name, game_name, game_type, game_category, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, is_bonus, is_jackpot, raw_data`,
+};
+
+const PAGE_SIZE_OPTIONS = [10, 20, 30, 100] as const;
 
 type DrawerTab = 'game' | 'bet' | 'raw';
 
@@ -188,8 +259,8 @@ function DetailDrawer({ row, onClose }: { row: MergedRound; onClose: () => void 
                 <span className="font-bold text-white text-base">{row.username}</span>
               </div>
               <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
-                <span>이전보유금 <span className="text-yellow-300">{fmtMoney(raw.beforeCash)}</span></span>
-                <span>현재보유금 <span className="text-emerald-300">{fmtMoney(raw.afterCash)}</span></span>
+                <span>이전보유금 <span className="text-yellow-300">{row.beforeCash !== null ? Number(row.beforeCash).toLocaleString() : '-'}</span></span>
+                <span>현재보유금 <span className="text-emerald-300">{row.afterCash !== null ? Number(row.afterCash).toLocaleString() : '-'}</span></span>
                 <span className="text-slate-600">{fmtTime(row.bet_time)}</span>
               </div>
             </div>
@@ -286,11 +357,15 @@ function DetailDrawer({ row, onClose }: { row: MergedRound; onClose: () => void 
 
 // ── 메인 컴포넌트 ──────────────────────────────────────────────
 export default function BettingHistory() {
+  const { user: authUser } = useAuth();
+  const isSystemAdmin = authUser?.role === 'system_admin';
+
   const [rows, setRows]           = useState<MergedRound[]>([]);
   const [loading, setLoading]     = useState(false);
   const [syncing, setSyncing]     = useState(false);
   const [page, setPage]           = useState(0);
   const [hasMore, setHasMore]     = useState(false);
+  const [pageSize, setPageSize]   = useState<number>(20);
   const [search, setSearch]       = useState('');
   const [startDate, setStartDate] = useState<Date>(startOfDay(new Date()));
   const [endDate, setEndDate]     = useState<Date>(endOfDay(new Date()));
@@ -313,39 +388,59 @@ export default function BettingHistory() {
       });
   }, []);
 
-  const load = useCallback(async (p: number) => {
+  const load = useCallback(async (p: number, size: number = pageSize) => {
     setLoading(true);
-    const pageFrom = p * PAGE_SIZE;
+    const pageFrom = p * size;
     const dateFrom = startOfDay(startDate).toISOString();
     const dateTo = endOfDay(endDate).toISOString();
 
     const queries = activeVendors.map(vk => {
+      const selectCols = VENDOR_SELECT_MAP[vk] ?? VENDOR_SELECT_MAP['ace'];
       let q = supabase
         .from(VENDOR_TABLE_MAP[vk])
-        .select('id, txid, round_id, username, provider_name, game_name, game_type, game_category, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, is_bonus, is_jackpot, raw_data')
+        .select(selectCols)
         .or(`and(bet_time.gte.${dateFrom},bet_time.lte.${dateTo}),and(settle_time.gte.${dateFrom},settle_time.lte.${dateTo})`)
-        .order('bet_time', { ascending: false })
-        .range(pageFrom, pageFrom + PAGE_SIZE * 2 - 1);
+        .order('bet_time', { ascending: false, nullsFirst: false })
+        .range(pageFrom, pageFrom + size * 2 - 1);
 
       if (search) q = q.ilike('username', `%${search}%`);
 
-      return q.then(res => (res.data ?? []).map((row: any) => ({ ...row, api_type: vk as BetRow['api_type'] })));
+      return q.then(res => (res.data ?? []).map((row: any) => ({
+        ...row,
+        game_category: row.game_category ?? null,
+        is_bonus:   row.is_bonus   ?? false,
+        is_jackpot: row.is_jackpot ?? false,
+        api_type: vk as BetRow['api_type'],
+      })));
     });
 
     const results = await Promise.all(queries);
     const allRaw = results
       .flat()
       .sort((a, b) => {
-        const ta = a.bet_time ? new Date(a.bet_time).getTime() : 0;
-        const tb = b.bet_time ? new Date(b.bet_time).getTime() : 0;
+        const ta = new Date((a.bet_time ?? a.settle_time) ?? 0).getTime();
+        const tb = new Date((b.bet_time ?? b.settle_time) ?? 0).getTime();
         return tb - ta;
       });
-    const merged = mergeRounds(allRaw).slice(0, PAGE_SIZE);
+    const merged = mergeRounds(allRaw).slice(0, size);
 
-    setRows(prev => p === 0 ? merged : [...prev, ...merged]);
-    setHasMore(results.some(r => r.length === PAGE_SIZE));
+    // 직속 상위 파트너 이름 일괄 조회
+    const parentIds = [...new Set(merged.map(r => r.parentId).filter(Boolean))] as string[];
+    if (parentIds.length > 0) {
+      const { data: parentUsers } = await supabase
+        .from('users')
+        .select('id, username, name')
+        .in('id', parentIds);
+      const nameMap = new Map((parentUsers ?? []).map((u: any) => [u.id, u.name || u.username]));
+      for (const r of merged) {
+        r.storeName = r.parentId ? (nameMap.get(r.parentId) ?? null) : null;
+      }
+    }
+
+    setRows(merged);
+    setHasMore(results.some(r => r.length >= size));
     setLoading(false);
-  }, [activeVendors, search, startDate, endDate]);
+  }, [activeVendors, search, startDate, endDate, pageSize]);
 
   useEffect(() => {
     if (activeVendors.length > 0) {
@@ -378,13 +473,31 @@ export default function BettingHistory() {
 
       if (vk === 'ace') {
         try {
-          const sdate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-          const r = await aceVendorService.syncBettingHistory(vendorRow as GameVendor, { sdate, limit: 2000 });
+          const r = await aceVendorService.syncBettingHistory(vendorRow as GameVendor, {
+            sdate: startOfDay(startDate).toISOString(),
+            edate: endOfDay(endDate).toISOString(),
+            limit: 2000,
+          });
           totalInserted += r.inserted;
           totalUpdated  += r.updated;
           allErrors.push(...r.errors);
         } catch (e: any) {
           allErrors.push(`${vk} 동기화 실패: ${e.message}`);
+        }
+      }
+
+      if (vk === 'honor') {
+        try {
+          const r = await honorVendorService.syncBettingHistory(vendorRow as GameVendor, {
+            startDate: startOfDay(startDate),
+            endDate:   endOfDay(endDate),
+            direct: true,
+          });
+          totalInserted += r.inserted;
+          totalUpdated  += r.updated;
+          allErrors.push(...r.errors);
+        } catch (e: any) {
+          allErrors.push(`${vk} 동기화 실패: ${(e as any).message ?? String(e)}`);
         }
       }
     }
@@ -535,10 +648,13 @@ export default function BettingHistory() {
             <thead>
               <tr className="border-b border-slate-700">
                 <th className="text-left p-3 text-slate-400 font-medium">사용자</th>
+                <th className="text-left p-3 text-slate-400 font-medium">상위</th>
+                {isSystemAdmin && <th className="text-left p-3 text-slate-400 font-medium">API</th>}
                 <th className="text-left p-3 text-slate-400 font-medium">게임사</th>
                 <th className="text-left p-3 text-slate-400 font-medium">게임명</th>
-                <th className="text-left p-3 text-slate-400 font-medium">게임유형</th>
-                <th className="text-left p-3 text-slate-400 font-medium">보유금 흐름</th>
+                <th className="text-left p-3 text-slate-400 font-medium">베팅</th>
+                <th className="text-left p-3 text-slate-400 font-medium">결과</th>
+                <th className="text-left p-3 text-slate-400 font-medium">이전금액 → 현재금액</th>
                 <th className="text-right p-3 text-slate-400 font-medium">GGR</th>
                 <th className="text-left p-3 text-slate-400 font-medium">상태</th>
                 <th className="text-left p-3 text-slate-400 font-medium">시간</th>
@@ -548,7 +664,7 @@ export default function BettingHistory() {
             <tbody>
               {rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={9} className="text-center text-slate-500 py-12">
+                  <td colSpan={isSystemAdmin ? 12 : 11} className="text-center text-slate-500 py-12">
                     베팅 내역이 없습니다.{' '}
                     <button onClick={handleSyncAll} className="text-orange-400 hover:underline font-medium">
                       베팅 동기화
@@ -559,53 +675,60 @@ export default function BettingHistory() {
               )}
               {rows.filter(row => row.bet_time !== null || row.settle_time !== null).map(row => {
                 const isWin = row.win_amount > 0;
-                const statusColor = isWin ? 'bg-green-900/40 text-green-300' : '';
-                const statusLabel = isWin ? '당첨' : '';
+                const isSettled = row.round_status === 'settled' || row.round_status === 'turn_lose';
+                const statusLabel = isSettled ? (isWin ? '당첨' : '낙첨') : '진행중';
+                const statusColor = isWin ? 'bg-green-900/40 text-green-300' : isSettled ? 'bg-slate-700 text-slate-400' : 'bg-yellow-900/30 text-yellow-400';
+                const apiColors: Record<string, string> = {
+                  honor:  'text-purple-400 bg-purple-900/30',
+                  ace:    'text-blue-400 bg-blue-900/30',
+                  invest: 'text-green-400 bg-green-900/30',
+                };
                 return (
                   <tr key={row.key} className="border-b border-slate-700/40 hover:bg-slate-700/20 transition-colors">
-                    <td className="p-3 text-white">{row.username}</td>
+                    <td className="p-3 text-white font-medium">{row.username}</td>
+                    <td className="p-3 text-slate-400 text-xs">{row.storeName || '-'}</td>
+                    {isSystemAdmin && (
+                      <td className="p-3">
+                        <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded uppercase ${apiColors[row.api_type] ?? 'text-slate-400 bg-slate-700'}`}>
+                          {row.api_type}
+                        </span>
+                      </td>
+                    )}
                     <td className="p-3 text-slate-300">{row.provider_name || '-'}</td>
-                    <td className="p-3 text-slate-300">{row.game_name || '-'}</td>
-                    <td className="p-3 text-slate-400">{row.game_type || '-'}</td>
+                    <td className="p-3 text-slate-200">{row.game_name || '-'}</td>
+                    <td className="p-3 text-red-300 font-mono text-sm">
+                      {row.bet_amount > 0 ? `-${Number(row.bet_amount).toLocaleString()}` : '-'}
+                    </td>
+                    <td className="p-3 font-mono text-sm">
+                      {isSettled
+                        ? <span className={isWin ? 'text-green-300' : 'text-slate-500'}>
+                            {isWin ? `+${Number(row.win_amount).toLocaleString()}` : '0'}
+                          </span>
+                        : <span className="text-yellow-400 text-xs">대기</span>
+                      }
+                    </td>
                     <td className="p-3">
-                      <div className="flex items-center gap-1 text-xs flex-nowrap whitespace-nowrap font-mono">
-                        {row.beforeCash !== null && (
-                          <>
-                            <span className="text-slate-500 font-sans">이전</span>
-                            <span className="text-yellow-300">{Number(row.beforeCash).toLocaleString()}</span>
-                          </>
-                        )}
-                        {row.bet_amount > 0 && (
-                          <>
-                            <span className="text-slate-600 font-sans">베팅</span>
-                            <span className="text-red-300">-{Number(row.bet_amount).toLocaleString()}</span>
-                          </>
-                        )}
-                        {(row.win_amount > 0 || row.round_status === 'settled' || row.round_status === 'turn_lose') && (
-                          <>
-                            <span className="text-slate-600 font-sans">당첨</span>
-                            <span className={Number(row.win_amount) > 0 ? 'text-green-300' : 'text-slate-500'}>
-                              {Number(row.win_amount) > 0 ? '+' : ''}{Number(row.win_amount).toLocaleString()}
+                      <div className="flex items-center gap-1.5 text-xs font-mono whitespace-nowrap">
+                        {row.beforeCash !== null
+                          ? <span className="text-yellow-300">{Number(row.beforeCash).toLocaleString()}</span>
+                          : <span className="text-slate-600">-</span>
+                        }
+                        <span className="text-slate-600">→</span>
+                        {row.afterCash !== null
+                          ? <span className={Number(row.afterCash) >= Number(row.beforeCash ?? 0) ? 'text-emerald-300' : 'text-orange-300'}>
+                              {Number(row.afterCash).toLocaleString()}
                             </span>
-                          </>
-                        )}
-                        {row.afterCash !== null && (
-                          <>
-                            <span className="text-slate-600 font-sans">현재</span>
-                            <span className="text-emerald-300">{Number(row.afterCash).toLocaleString()}</span>
-                          </>
-                        )}
+                          : <span className="text-slate-600">-</span>
+                        }
                       </div>
                     </td>
                     <td className={`p-3 text-right font-medium ${row.ggr >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
                       {row.ggr >= 0 ? '+' : ''}{row.ggr.toLocaleString()}
                     </td>
                     <td className="p-3">
-                      {statusLabel && (
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${statusColor}`}>
-                          {statusLabel}
-                        </span>
-                      )}
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${statusColor}`}>
+                        {statusLabel}
+                      </span>
                     </td>
                     <td className="p-3 text-slate-400 text-xs">{fmtTime(row.bet_time ?? row.settle_time)}</td>
                     <td className="p-3 text-center">
@@ -624,20 +747,51 @@ export default function BettingHistory() {
           </table>
         </div>
 
-        {(loading || hasMore) && (
-          <div className="flex justify-center p-4 border-t border-slate-700">
-            {loading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-            ) : (
-              <Button
-                onClick={() => { const next = page + 1; setPage(next); load(next); }}
-                className="bg-slate-700 hover:bg-slate-600 text-sm"
-              >
-                더 보기
-              </Button>
-            )}
+        {/* 페이지 내비게이션 */}
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700">
+          {/* 페이지 크기 선택 */}
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500 text-xs">페이지당</span>
+            <div className="flex gap-1">
+              {PAGE_SIZE_OPTIONS.map(size => (
+                <button
+                  key={size}
+                  onClick={() => { setPageSize(size); setPage(0); load(0, size); }}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    pageSize === size
+                      ? 'bg-slate-500 text-white'
+                      : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-200'
+                  }`}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+            <span className="text-slate-500 text-xs">개</span>
           </div>
-        )}
+
+          {/* 페이지 이동 */}
+          <div className="flex items-center gap-2">
+            {loading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+            <button
+              onClick={() => { const prev = page - 1; setPage(prev); load(prev); }}
+              disabled={page === 0 || loading}
+              className="px-3 py-1.5 rounded text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              이전
+            </button>
+            <span className="text-slate-300 text-sm font-medium px-2">
+              {page + 1} 페이지
+            </span>
+            <button
+              onClick={() => { const next = page + 1; setPage(next); load(next); }}
+              disabled={!hasMore || loading}
+              className="px-3 py-1.5 rounded text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              다음
+            </button>
+          </div>
+        </div>
       </Card>
 
       {/* 상세 드로어 */}

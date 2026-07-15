@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../../../utils/supabase/client';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'sonner';
+import { api } from '../../../utils/api';
 
 // ─── Memo helpers ─────────────────────────────────────────────────────────────
 
@@ -298,16 +299,27 @@ function MemberDetailDrawer({
         { table: 'betting_history_honor',  key: 'honor' },
       ];
 
+      const VENDOR_SELECT: Record<string, string> = {
+        ace:    'id, round_id, provider_name, game_name, game_type, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, is_bonus, is_jackpot, raw_data',
+        honor:  'id, round_id, provider_name, game_name, game_type, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, raw_data',
+        invest: 'id, round_id, provider_name, game_name, game_type, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, raw_data',
+      };
+
       const results = await Promise.all(
         VENDOR_TABLES.map(({ table, key }) =>
           supabase
             .from(table)
-            .select('id, round_id, provider_name, game_name, game_type, bet_amount, win_amount, ggr, round_status, bet_time, settle_time, is_bonus, is_jackpot, raw_data')
+            .select(VENDOR_SELECT[key] ?? VENDOR_SELECT['ace'])
             .eq('username', member.username)
             .or(`bet_time.not.is.null,settle_time.not.is.null`)
             .order('bet_time', { ascending: false, nullsFirst: false })
             .limit(100)
-            .then(({ data }) => (data ?? []).map((r: any) => ({ ...r, api_type: key })))
+            .then(({ data }) => (data ?? []).map((r: any) => ({
+              ...r,
+              is_bonus:   r.is_bonus   ?? false,
+              is_jackpot: r.is_jackpot ?? false,
+              api_type: key,
+            })))
         )
       );
 
@@ -1360,8 +1372,30 @@ export default function MemberList() {
         }
       }
 
+      // 충전인 경우 게임 중이면 게임사 API에도 직접 입금
+      if (txModal.type === 'deposit') {
+        try {
+          const { data: { session: authSession } } = await supabase.auth.getSession();
+          const token = authSession?.access_token;
+          if (token) {
+            const result = await api.adminGameDeposit(txModal.member.id, amount, token);
+            if (result.inGame) {
+              toast.success(`${txModal.member.username} 게임 중 실시간 충전 완료: ₩${amount.toLocaleString()}`);
+            } else {
+              toast.success(`${txModal.member.username} 충전 완료: ₩${amount.toLocaleString()}`);
+            }
+          } else {
+            toast.success(`${txModal.member.username} 충전 완료: ₩${amount.toLocaleString()}`);
+          }
+        } catch (gameErr: any) {
+          // 게임사 입금 실패 시 경고만 표시 (DB 충전은 이미 완료됨)
+          toast.warning(`DB 충전은 완료됐으나 게임사 실시간 반영 실패: ${gameErr.message}`);
+        }
+      } else {
+        toast.success(`${txModal.member.username} 환전 완료: ₩${amount.toLocaleString()}`);
+      }
+
       setMembers(prev => prev.map(m => m.id === txModal.member.id ? { ...m, balance: newBalance } : m));
-      toast.success(`${txModal.member.username} 회원 ${txModal.type === 'deposit' ? '충전' : '환전'} 완료: ₩${amount.toLocaleString()}`);
       setTxModal(null);
     } catch (e: any) {
       toast.error('처리 실패: ' + e.message);

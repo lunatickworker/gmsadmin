@@ -122,39 +122,26 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // 어드민 JWT 검증
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ success: false, error: "Authorization required" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 401,
-      });
-    }
-
-    const anonSupabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    // 요청자가 어드민 role인지 확인
-    const { data: { user }, error: authError } = await anonSupabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ success: false, error: "Invalid token" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 401,
-      });
-    }
-
     const serviceSupabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
+    const body = await req.json();
+    const { userId, adminId } = body as { userId: string; adminId?: string };
+
+    // adminId로 관리자 권한 검증 (커스텀 인증 시스템 사용으로 Supabase JWT 없음)
+    if (!adminId) {
+      return new Response(JSON.stringify({ success: false, error: "adminId required" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401,
+      });
+    }
+
     const { data: adminRow } = await serviceSupabase
       .from("users")
       .select("role")
-      .eq("auth_id", user.id)
+      .eq("id", adminId)
       .single();
 
     const adminRoles = ["system_admin", "operator", "head_office", "sub_office", "distributor", "store"];
@@ -164,9 +151,6 @@ Deno.serve(async (req) => {
         status: 403,
       });
     }
-
-    const body = await req.json();
-    const { userId } = body as { userId: string };
     if (!userId) {
       return new Response(JSON.stringify({ success: false, error: "userId required" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -238,20 +222,15 @@ Deno.serve(async (req) => {
     }
 
     // is_online=false + 세션 초기화 → 게임 클라이언트 실시간 구독이 자동 로그아웃 처리
-    const now = new Date().toISOString();
     await Promise.all([
       serviceSupabase
         .from("users")
         .update({ is_online: false, active_game_session: null, balance: returnedAmount || userRow.balance })
         .eq("id", userId),
-      serviceSupabase
-        .from("online_sessions")
-        .update({ is_active: false, logout_at: now })
-        .eq("user_id", userId)
-        .eq("is_active", true),
+      serviceSupabase.from("online_sessions").delete().eq("user_id", userId),
     ]);
 
-    console.log(`[admin-force-logout] admin=${user.id} target=${userId} returned=${returnedAmount}`);
+    console.log(`[admin-force-logout] admin=${adminId} target=${userId} returned=${returnedAmount}`);
 
     return new Response(
       JSON.stringify({ success: true, returnedAmount }),

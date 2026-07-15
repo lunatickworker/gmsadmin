@@ -223,7 +223,6 @@ function GameLayout() {
           .from('online_sessions')
           .update({ last_activity_at: now })
           .eq('user_id', gameUser.id)
-          .eq('is_active', true)
           .then(() => { /* best-effort */ });
       }
     };
@@ -245,12 +244,15 @@ function GameLayout() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${gameUser.id}` },
         (payload) => {
-          const updated = payload.new as { is_online: boolean; status: string };
+          const updated = payload.new as { is_online: boolean; status: string; balance: number };
           if (!updated.is_online || updated.status !== 'active') {
             // 서버에서 오프라인 처리되었거나 계정 상태 변경 → 자동 로그아웃
             localStorage.removeItem(GAME_SESSION_KEY);
             setGameUser(null);
             setBalance(0);
+          } else {
+            // 관리자가 잔액을 변경한 경우 즉시 반영
+            setBalance(Number(updated.balance ?? 0));
           }
         }
       )

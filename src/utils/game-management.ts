@@ -31,40 +31,99 @@ function md5(...parts: (string | number)[]): string {
 
 // honorlink API: Bearer 토큰 인증 (md5/signature 없음 - honor는 Bearer만 사용)
 // GET: 파라미터 → URL 쿼리스트링, POST: 파라미터 → JSON body
+
+// /transactions 전용 직렬 큐 — 30초 간격 제한은 베팅 내역 조회에만 적용 (honor-api.md 참조)
+// 다른 엔드포인트(게임 실행, 입출금 등)는 제한 없음
+const HONOR_TRANSACTIONS_INTERVAL_MS = 31_000;
+let _lastTransactionsCallAt = 0;
+let _transactionsQueue: Promise<any> = Promise.resolve();
+
+function _enqueueTransactionsCall<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _transactionsQueue.then(async () => {
+    const gap = Date.now() - _lastTransactionsCallAt;
+    if (_lastTransactionsCallAt > 0 && gap < HONOR_TRANSACTIONS_INTERVAL_MS) {
+      const wait = HONOR_TRANSACTIONS_INTERVAL_MS - gap;
+      console.log(`[HONOR TRANSACTIONS] rate-limit 대기 ${Math.ceil(wait / 1000)}초...`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+    _lastTransactionsCallAt = Date.now();
+    return fn();
+  });
+  _transactionsQueue = next.catch(() => {});
+  return next;
+}
+
 async function callHonorProxy<T = any>(
   apiBaseUrl: string,
   endpoint: string,
   bearerToken: string,
   method: 'GET' | 'POST' = 'GET',
   params?: Record<string, string | number>,
+  maxRetries = 3,
+  direct = false,  // true면 큐/대기 없이 즉시 호출 (수동 버튼 클릭용)
 ): Promise<T> {
-  let url = `${apiBaseUrl.replace(/\/$/, '')}${endpoint}`;
+  const isTransactions = endpoint === '/transactions';
 
-  const proxyPayload: Record<string, any> = {
-    method,
-    headers: {
-      'Authorization': `Bearer ${bearerToken}`,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
+  const doCall = async (): Promise<T> => {
+    let url = `${apiBaseUrl.replace(/\/$/, '')}${endpoint}`;
+
+    const proxyPayload: Record<string, any> = {
+      method,
+      headers: {
+        'Authorization': `Bearer ${bearerToken}`,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+    };
+
+    proxyPayload.url = url;
+
+    if (params && Object.keys(params).length > 0) {
+      // Honor API는 프록시의 body 필드로 파라미터 전달 (쿼리스트링 X)
+      proxyPayload.body = Object.fromEntries(
+        Object.entries(params).map(([k, v]) => [k, String(v)])
+      );
+    }
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log('[HONOR PROXY] payload:', JSON.stringify(proxyPayload));
+      const res = await fetch(PROXY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(proxyPayload),
+      });
+
+      if (res.status === 429) {
+        const errText = await res.text().catch(() => '');
+        // direct(수동 버튼)면 즉시 throw → 호출부에서 토스트로 처리
+        if (direct) {
+          throw new Error(`HONOR_429: ${errText}`);
+        }
+        console.warn(`[HONOR PROXY] 429 (시도 ${attempt}/${maxRetries}), ${HONOR_TRANSACTIONS_INTERVAL_MS / 1000}초 후 재시도...`, errText);
+        if (attempt < maxRetries && isTransactions) {
+          _lastTransactionsCallAt = Date.now();
+          await new Promise(r => setTimeout(r, HONOR_TRANSACTIONS_INTERVAL_MS));
+          _lastTransactionsCallAt = Date.now();
+          continue;
+        }
+        throw new Error(`Proxy error 429: ${errText}`);
+      }
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        console.error('[HONOR PROXY] error:', res.status, errText);
+        throw new Error(`Proxy error ${res.status}: ${errText}`);
+      }
+      return res.json() as Promise<T>;
+    }
+    throw new Error('Honor API 최대 재시도 횟수 초과');
   };
 
-  // honor-api.md: 모든 파라미터는 (query) 타입 → GET/POST 모두 URL 쿼리스트링으로 전달
-  if (params && Object.keys(params).length > 0) {
-    const qs = new URLSearchParams(
-      Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
-    ).toString();
-    url = `${url}?${qs}`;
+  // direct=true(수동 버튼)면 큐/대기 없이 즉시 호출, 아니면 /transactions만 직렬 큐
+  if (isTransactions && !direct) {
+    return _enqueueTransactionsCall(doCall);
   }
-  proxyPayload.url = url;
-
-  const res = await fetch(PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(proxyPayload),
-  });
-  if (!res.ok) throw new Error(`Proxy error ${res.status}: ${res.statusText}`);
-  return res.json();
+  return doCall();
 }
 
 // ─── Constants ───────────────────────────────────────────────
@@ -491,7 +550,7 @@ export const gameItemService = {
 // ============================================================
 // Honor API 서비스
 // 인증: Authorization: Bearer {secret_key} (game_vendors.secret_key)
-// Proxy: proxy.gms0811.com/proxy → api.honorlink.org/ap
+// Proxy: proxy.gms0811.com/proxy → api.honorlink.org/api
 // md5/signature 없음 — Bearer 토큰만으로 에이전트 구별
 // ============================================================
 
@@ -844,17 +903,154 @@ export const honorVendorService = {
       perPage?: number;
       withDetails?: 0 | 1;
       order?: 'asc' | 'desc';
-    }
+    },
+    direct = false,
   ): Promise<any> {
     const queryParams: Record<string, string | number> = {
       start: params.start,
       end: params.end,
       page: params.page,
-      perPage: params.perPage ?? 100,
+      perpage: params.perPage ?? 100,
     };
     if (params.withDetails !== undefined) queryParams.withDetails = params.withDetails;
     if (params.order) queryParams.order = params.order;
-    return callHonorProxy(vendor.api_base_url, '/transactions', vendor.secret_key, 'GET', queryParams);
+    return callHonorProxy(vendor.api_base_url, '/transactions', vendor.secret_key, 'GET', queryParams, 3, direct);
+  },
+
+  async syncBettingHistory(
+    vendor: GameVendor,
+    options: { hours?: number; direct?: boolean; startDate?: Date; endDate?: Date } = {}
+  ): Promise<{ inserted: number; updated: number; errors: string[] }> {
+    const fmt = (d: Date) => d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+
+    // direct=true(수동 버튼)면 첫 호출만 즉시, 이후 청크는 큐로 30초 간격 보장
+    if (options.direct) {
+      _lastTransactionsCallAt = 0;
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    const errors: string[] = [];
+
+    // startDate/endDate가 있으면 해당 범위를 1시간 청크로 분할
+    const rangeEnd   = options.endDate   ? new Date(options.endDate)   : new Date();
+    const rangeStart = options.startDate ? new Date(options.startDate) : new Date(rangeEnd.getTime() - (options.hours ?? 24) * 60 * 60 * 1000);
+    const totalHours = Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / (60 * 60 * 1000)) || 1;
+
+    for (let i = 0; i < totalHours; i++) {
+      const chunkStart = fmt(new Date(rangeStart.getTime() + i * 60 * 60 * 1000));
+      const chunkEnd   = fmt(new Date(Math.min(rangeStart.getTime() + (i + 1) * 60 * 60 * 1000, rangeEnd.getTime())));
+      // 항상 큐를 통해 30초 간격 보장 (direct=false 고정)
+      try {
+        let page = 1;
+        while (true) {
+          const res = await honorVendorService.getTransactions(vendor, {
+            start: chunkStart, end: chunkEnd, page, perPage: 1000,
+          }, false);
+          const transactions: any[] = res?.data ?? [];
+          if (transactions.length === 0) break;
+
+          for (const tx of transactions) {
+            try {
+              const username: string = tx.user?.username ?? '';
+              if (!username) continue;
+              if (!['bet', 'win', 'cancel'].includes(tx.type)) continue;
+
+              const { data: userRow } = await supabase
+                .from('users')
+                .select('id, username, hierarchy_path, depth')
+                .eq('username', username)
+                .maybeSingle();
+              if (!userRow) { errors.push(`유저 없음: ${username} (txid: ${tx.id})`); continue; }
+
+              // hierarchy_path = [..., operator, head_office, sub_office, distributor, store, self]
+              const hp = (userRow.hierarchy_path ?? []) as string[];
+              const hpLen = hp.length;
+              const getHpId = (depth: number) => (hpLen > depth ? hp[depth] : null);
+
+              const isBet    = tx.type === 'bet';
+              const isWin    = tx.type === 'win';
+              const gameDetail = tx.details?.game ?? {};
+              const roundId  = gameDetail.round ?? null;
+
+              if (isWin && roundId) {
+                const { data: existing } = await supabase
+                  .from('betting_history_honor')
+                  .select('id')
+                  .eq('round_id', roundId)
+                  .eq('user_id', userRow.id)
+                  .eq('round_status', 'betting')
+                  .maybeSingle();
+                if (existing) {
+                  const { error } = await supabase
+                    .from('betting_history_honor')
+                    .update({
+                      win_amount:   Math.abs(Number(tx.amount ?? 0)),
+                      round_status: 'settled',
+                      settle_time:  tx.processed_at ?? null,
+                      synced_at:    new Date().toISOString(),
+                    })
+                    .eq('id', existing.id);
+                  if (error) errors.push(`win 갱신 실패 (${tx.id}): ${error.message}`);
+                  else updated++;
+                  continue;
+                }
+              }
+
+              // UUID 컬럼은 빈 문자열이면 null로 변환 (PostgreSQL UUID 타입 오류 방지)
+              const toUuid = (v: string | null | undefined) => (v && v.trim() !== '' ? v : null);
+              const record = {
+                txid:            String(tx.id),
+                user_id:         userRow.id,
+                username,
+                operator_id:     toUuid(getHpId(1)),
+                head_office_id:  toUuid(getHpId(2)),
+                sub_office_id:   toUuid(getHpId(3)),
+                distributor_id:  toUuid(getHpId(4)),
+                store_id:        toUuid(getHpId(5)),
+                game_id:         gameDetail.id   != null ? String(gameDetail.id)   : null,
+                game_name:       gameDetail.title != null ? String(gameDetail.title) : null,
+                game_type:       gameDetail.type  != null ? String(gameDetail.type)  : null,
+                game_category:   gameDetail.vendor != null ? String(gameDetail.vendor) : null,
+                provider_name:   gameDetail.vendor != null ? String(gameDetail.vendor) : null,
+                bet_amount:      isBet ? Math.abs(Number(tx.amount ?? 0)) : 0,
+                win_amount:      isWin ? Math.abs(Number(tx.amount ?? 0)) : 0,
+                before_amount:   tx.before != null ? Number(tx.before) : null,
+                after_amount:    (tx.before != null && tx.amount != null) ? Number(tx.before) + Number(tx.amount) : null,
+                round_id:        roundId ?? null,
+                round_status:    isBet ? 'betting' : (isWin ? 'settled' : tx.type),
+                bet_time:        isBet ? (tx.processed_at ?? null) : null,
+                settle_time:     isWin ? (tx.processed_at ?? null) : null,
+                raw_data:        tx,
+                synced_at:       new Date().toISOString(),
+              };
+
+              const { error } = await supabase
+                .from('betting_history_honor')
+                .upsert(record, { onConflict: 'txid' });
+              if (error) {
+                console.error('[HONOR UPSERT ERROR]', {
+                  code: error.code, message: error.message,
+                  details: error.details, hint: error.hint,
+                  record,
+                });
+                errors.push(`upsert 실패 (${tx.id}): [${error.code}] ${error.message} | ${error.details ?? ''}`);
+              }
+              else inserted++;
+            } catch (e: any) {
+              errors.push(`처리 오류 (${tx.id}): ${e.message}`);
+            }
+          }
+
+          if (transactions.length < 1000) break;
+          page++;
+        }
+      } catch (e: any) {
+        errors.push(`구간 조회 실패 (${chunkStart} ~ ${chunkEnd}): ${e.message}`);
+      }
+    }
+
+    return { inserted, updated, errors };
   },
 };
 

@@ -221,18 +221,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    // DB 잔액 업데이트 + 세션 초기화 + online_sessions 비활성화
-    const now = new Date().toISOString();
+    // DB 잔액 업데이트 + 세션 초기화 + online_sessions 행 삭제
     await Promise.all([
       serviceSupabase
         .from("users")
         .update({ balance: returnedAmount, active_game_session: null, is_online: false })
         .eq("id", userId),
-      serviceSupabase
-        .from("online_sessions")
-        .update({ is_active: false, logout_at: now })
-        .eq("user_id", userId)
-        .eq("is_active", true),
+      serviceSupabase.from("online_sessions").delete().eq("user_id", userId),
     ]);
 
     console.log(`[cashout-on-exit] userId=${userId} vendorType=${session.vendorType} returned=${returnedAmount}`);

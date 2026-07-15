@@ -50,6 +50,33 @@ async function callAceProxy<T = any>(
   return data as T;
 }
 
+async function callHonorProxy<T = any>(
+  apiBaseUrl: string, endpoint: string, bearerToken: string,
+  method: 'GET' | 'POST' = 'GET', params?: Record<string, string | number>
+): Promise<T> {
+  let url = `${apiBaseUrl.replace(/\/$/, '')}${endpoint}`;
+  if (method === 'GET' && params && Object.keys(params).length > 0) {
+    url += '?' + new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
+  }
+  const proxyPayload: Record<string, any> = {
+    url,
+    method,
+    headers: {
+      'Authorization': `Bearer ${bearerToken}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+  };
+  if (method === 'POST' && params && Object.keys(params).length > 0) proxyPayload.body = params;
+  const res = await fetch(PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(proxyPayload),
+  });
+  if (!res.ok) throw new Error(`Proxy error ${res.status}`);
+  return res.json();
+}
+
 interface Game {
   id: string;
   provider_id: string;
@@ -100,11 +127,12 @@ export default function GameList({ userId, userName }: GameListProps) {
 
       const investProviderIds = (investProviders ?? []).map((p: any) => p.id);
 
-      const [investRes, aceRes] = await Promise.all([
+      const [investRes, aceRes, honorRes] = await Promise.all([
         investProviderIds.length > 0
           ? supabase.from('game_invest').select('*').eq('status', 'active').in('provider_id', investProviderIds)
           : Promise.resolve({ data: [] as any[] }),
         supabase.from('game_ace').select('*, provider:game_provider_ace(vendor_key)').eq('status', 'active'),
+        supabase.from('game_honor').select('*, provider:game_provider_honor(vendor_id, vendor_key, metadata)').eq('status', 'active').neq('type', 'lobby'),
       ]);
 
       const investGames: Game[] = (investRes.data ?? []).map((g: any) => ({
@@ -131,7 +159,26 @@ export default function GameList({ userId, userName }: GameListProps) {
         metadata: { ...(g.metadata ?? {}), _ace: true, _vendorKey: g.provider?.vendor_key ?? '' },
       }));
 
-      setGames([...investGames, ...aceGames].filter((g) => g.status === 'active'));
+      const honorGames: Game[] = (honorRes.data ?? []).map((g: any) => ({
+        id: g.id,
+        provider_id: g.provider_id,
+        game_code: String(g.game_id),
+        game_name: g.title_ko || g.title || `Game ${g.game_id}`,
+        game_type: g.type,
+        thumbnail_url: g.thumbnail ?? null,
+        status: g.status,
+        rtp: undefined,
+        metadata: {
+          ...(g.metadata ?? {}),
+          _honor: true,
+          _honorVendorKey: g.vendor_key ?? '',
+          _honorGameId: g.game_id,
+          _honorVendorName: g.provider?.metadata?.honor_vendor || g.provider?.vendor_key || '',
+          _honorVendorDbId: g.provider?.vendor_id ?? '',
+        },
+      }));
+
+      setGames([...investGames, ...aceGames, ...honorGames].filter((g) => g.status === 'active'));
     } catch (error) {
       console.error(error);
       toast.error('게임 목록을 불러오는데 실패했습니다.');
@@ -151,7 +198,31 @@ export default function GameList({ userId, userName }: GameListProps) {
     try {
       setLaunchingGame(game.id);
 
-      if (game.metadata?._ace) {
+      if (game.metadata?._honor) {
+        // HONOR 게임 실행 (ACE와 동일한 방식: 유저 생성 후 launch link 획득)
+        const honorVendorDbId: string = game.metadata._honorVendorDbId;
+        if (!honorVendorDbId) throw new Error('HONOR 게임사 DB ID를 찾을 수 없습니다.');
+
+        const { data: honorVendor } = await supabase
+          .from('game_vendors')
+          .select('*')
+          .eq('id', honorVendorDbId)
+          .maybeSingle<GameVendor>();
+        if (!honorVendor) throw new Error('HONOR 게임사 정보를 찾을 수 없습니다.');
+
+        const honorVendorName: string = game.metadata._honorVendorName;
+        const honorGameId: number = game.metadata._honorGameId;
+        // game-launch-link auto-creates the user if not exists
+        const res = await callHonorProxy<{ link: string; user: any; userCreate: boolean }>(
+          honorVendor.api_base_url, '/game-launch-link', honorVendor.secret_key, 'GET',
+          { username: siteUsername, game_id: honorGameId, vendor: honorVendorName, nickname: siteUsername }
+        );
+        if (res.link) {
+          window.open(res.link, '_blank');
+        } else {
+          throw new Error('게임 URL을 받을 수 없습니다.');
+        }
+      } else if (game.metadata?._ace) {
         // ACE 게임 실행
         const { data: aceVendor } = await supabase
           .from('game_vendors').select('*').eq('vendor_key', 'ace').maybeSingle<GameVendor>();
@@ -179,12 +250,12 @@ export default function GameList({ userId, userName }: GameListProps) {
           { vendorKey, gameKey: game.game_code, siteUsername, nickname: siteUsername, ip: '127.0.0.1', language: 'ko', platform: 'desktop', requestKey }
         );
         if (res.url) {
-          window.open(res.url, '_blank', 'width=1280,height=720');
+          window.open(res.url, '_blank');
         } else {
           throw new Error('게임 URL을 받을 수 없습니다.');
         }
       } else {
-        // Invest / Honor 게임 실행
+        // Invest 게임 실행
         const { data: provRow } = await supabase
           .from('game_provider_invest')
           .select('*, vendor:game_vendors(*)')
@@ -218,7 +289,7 @@ export default function GameList({ userId, userName }: GameListProps) {
         }
         const url = launchRes.DATA?.url ?? launchRes.DATA?.URL ?? launchRes.DATA?.game_url;
         if (url) {
-          window.open(url, '_blank', 'width=1280,height=720');
+          window.open(url, '_blank');
         } else {
           throw new Error('게임 URL을 받을 수 없습니다.');
         }

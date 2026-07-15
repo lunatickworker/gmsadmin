@@ -63,6 +63,38 @@ export const api = {
     return apiFetch(`/users/${id}/invest-balance`);
   },
 
+  // 게임 중인 유저의 실제 잔액을 게임사 API에서 조회 (게임 아닌 경우 DB 반환)
+  async getUserGameBalance(userId: string, authToken: string): Promise<{ balance: number; source: string }> {
+    const projectId = "hcbrrgxzlydwrryokxti";
+    const res = await fetch(`https://${projectId}.supabase.co/functions/v1/get-game-balance`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error ?? "잔액 조회 실패");
+    return { balance: data.balance, source: data.source };
+  },
+
+  // 게임 중인 유저에게 관리자 충전 시 게임사 API에도 직접 입금
+  async adminGameDeposit(userId: string, amount: number, authToken: string): Promise<{ inGame: boolean; newVendorBalance?: number }> {
+    const projectId = "hcbrrgxzlydwrryokxti";
+    const res = await fetch(`https://${projectId}.supabase.co/functions/v1/admin-game-deposit`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ userId, amount }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error ?? "게임사 입금 실패");
+    return { inGame: data.inGame, newVendorBalance: data.newVendorBalance };
+  },
+
   // ==================== 입출금 (DB) ====================
   async getDbTransactions(params?: { type?: string; status?: string; user_id?: string; page?: number; limit?: number }) {
     const qs = new URLSearchParams();

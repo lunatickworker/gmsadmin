@@ -194,7 +194,7 @@ function ApiCallLogs() {
 // ── 머니 로그 (통합) 탭 ─────────────────────────────────────────
 interface MoneyEvent {
   id: string;
-  source: '게임베팅' | '게임정산' | '입금' | '출금' | '관리자조정' | '포인트';
+  source: '게임베팅' | '게임정산' | '입금' | '출금' | '관리자조정' | '포인트' | '게임오류';
   username: string;
   amount: number;
   balance_before?: number;
@@ -347,6 +347,29 @@ function MoneyLog() {
       }
     }
 
+    // 5. 게임 API 오류 로그
+    {
+      let q = supabase
+        .from('money_error_logs')
+        .select('id, username, vendor, error_code, error_type, error_message, amount, status, memo, created_at')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (search) q = q.ilike('username', `%${search}%`);
+      const { data } = await q;
+      for (const r of data ?? []) {
+        results.push({
+          id: `err-${r.id}`,
+          source: '게임오류',
+          username: r.username,
+          amount: Number(r.amount ?? 0),
+          memo: r.error_message ?? r.error_type ?? undefined,
+          status: r.status,
+          created_at: r.created_at,
+          api_type: r.vendor,
+        });
+      }
+    }
+
     // 시간순 정렬
     results.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     setEvents(results);
@@ -362,9 +385,10 @@ function MoneyLog() {
     '출금':       'bg-orange-900/40 text-orange-300 border-orange-800/40',
     '관리자조정': 'bg-red-900/40 text-red-300 border-red-800/40',
     '포인트':     'bg-emerald-900/40 text-emerald-300 border-emerald-800/40',
+    '게임오류':   'bg-rose-900/60 text-rose-300 border-rose-700/60',
   };
 
-  const SOURCES = ['all', '게임베팅', '게임정산', '입금', '출금', '관리자조정', '포인트'];
+  const SOURCES = ['all', '게임베팅', '게임정산', '입금', '출금', '관리자조정', '포인트', '게임오류'];
   const filtered = srcFilter === 'all' ? events : events.filter(e => e.source === srcFilter);
 
   return (
@@ -453,11 +477,17 @@ function MoneyLog() {
                 </td>
                 <td className="px-3 py-2 text-slate-400 max-w-[200px] truncate">
                   {ev.status ? <span className={`mr-2 px-1 py-0.5 rounded text-[10px] ${
-                    ev.status === 'approved' ? 'bg-green-900/40 text-green-300' :
-                    ev.status === 'rejected' ? 'bg-red-900/40 text-red-300' :
-                    ev.status === 'pending'  ? 'bg-yellow-900/40 text-yellow-300' :
+                    ev.status === 'approved'  ? 'bg-green-900/40 text-green-300' :
+                    ev.status === 'rejected'  ? 'bg-red-900/40 text-red-300' :
+                    ev.status === 'pending'   ? 'bg-yellow-900/40 text-yellow-300' :
+                    ev.status === 'error'     ? 'bg-rose-900/60 text-rose-300' :
+                    ev.status === 'resolved'  ? 'bg-teal-900/40 text-teal-300' :
                     'bg-slate-700 text-slate-400'
-                  }`}>{ev.status}</span> : null}
+                  }`}>{
+                    ev.status === 'error' ? '오류' :
+                    ev.status === 'resolved' ? '해결됨' :
+                    ev.status
+                  }</span> : null}
                   {ev.memo ?? ''}
                 </td>
               </tr>

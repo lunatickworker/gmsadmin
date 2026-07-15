@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, Users, Monitor, Clock, Eye, EyeOff, Loader2, LogOut, AlertTriangle } from 'lucide-react';
+import { Search, RefreshCw, Users, Monitor, Clock, Loader2, LogOut, AlertTriangle } from 'lucide-react';
 import { supabase, supabaseUrl } from '../../../utils/supabase/client';
+import { supabaseAnonKey } from '../../../utils/supabase/client';
 import { api } from '../../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 
 const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
 const PARTNER_ROLE: Record<string, string> = {
@@ -15,7 +17,6 @@ interface SessionRow {
   ip_address: string | null;
   login_at: string | null;
   last_activity_at: string | null;
-  is_active: boolean;
   provider_name: string | null;
   game_name: string | null;
   user: {
@@ -48,37 +49,48 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleString('ko-KR');
 }
 
-function BalanceCell({ userId }: { userId: string }) {
-  const [revealed, setRevealed] = useState(false);
-  const [balance, setBalance] = useState<number | null>(null);
+function BalanceCell({ userId, initialBalance }: { userId: string; initialBalance: number | null }) {
+  const [balance, setBalance] = useState<number | null>(initialBalance);
   const [loading, setLoading] = useState(false);
+  const [source, setSource] = useState<string | null>(null);
 
-  const reveal = async () => {
-    if (revealed) { setRevealed(false); return; }
+  const refresh = async () => {
     setLoading(true);
     try {
-      const res = await api.getUserInvestBalance(userId);
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('no token');
+      const res = await api.getUserGameBalance(userId, token);
       setBalance(res.balance ?? null);
+      setSource(res.source ?? null);
     } catch {
+      // 폴백: DB에서 직접 조회
       const { data } = await supabase.from('users').select('balance').eq('id', userId).single();
       setBalance(data?.balance ?? null);
+      setSource('db');
     } finally {
       setLoading(false);
-      setRevealed(true);
     }
   };
 
+  const isLive = source && source !== 'db' && source !== 'db_fallback';
+
   return (
     <div className="flex items-center gap-1.5 whitespace-nowrap">
-      <span className="text-slate-300 text-sm">
-        {revealed ? (balance !== null ? `₩${Number(balance).toLocaleString()}` : '-') : '••••••'}
+      <span className="text-slate-300 text-sm font-medium">
+        {balance !== null ? `₩${Number(balance).toLocaleString()}` : '-'}
       </span>
+      {isLive && (
+        <span className="px-1 py-0.5 text-[10px] bg-green-500/15 text-green-400 rounded border border-green-500/20" title={`${source} API 실시간`}>
+          LIVE
+        </span>
+      )}
       <button
-        onClick={reveal}
+        onClick={refresh}
         className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-600/50 transition-colors"
-        title={revealed ? '숨기기' : '금액 확인'}
+        title={isLive ? `${source} API 실시간 잔액` : '잔액 새로고침'}
       >
-        {loading ? <Loader2 size={12} className="animate-spin" /> : revealed ? <EyeOff size={12} /> : <Eye size={12} />}
+        {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
       </button>
     </div>
   );
@@ -134,6 +146,7 @@ function ConfirmModal({
 }
 
 export default function OnlineUsers() {
+  const { user: adminUser } = useAuth();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
@@ -148,7 +161,7 @@ export default function OnlineUsers() {
       const { data } = await supabase
         .from('online_sessions')
         .select(`
-          id, user_id, ip_address, login_at, last_activity_at, is_active, provider_name, game_name,
+          id, user_id, ip_address, login_at, last_activity_at, provider_name, game_name,
           user:user_id(id, username, name, balance, last_heartbeat_at, parent:parent_id(username, name, role))
         `)
         .eq('is_active', true)
@@ -166,7 +179,17 @@ export default function OnlineUsers() {
     load();
     const channel = supabase
       .channel('online-sessions-watch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'online_sessions' }, () => load())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'online_sessions' }, () => load())
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'online_sessions' }, (payload) => {
+        setSessions((prev) => prev.filter((s) => s.id !== payload.old.id));
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'online_sessions' }, (payload) => {
+        if (payload.new.is_active === false) {
+          setSessions((prev) => prev.filter((s) => s.id !== payload.new.id));
+        } else {
+          load();
+        }
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users', filter: 'role=eq.member' }, (payload) => {
         setSessions((prev) =>
           prev.map((s) =>
@@ -180,6 +203,7 @@ export default function OnlineUsers() {
     return () => { supabase.removeChannel(channel); };
   }, [load]);
 
+  // 30초마다 "방금 전 / N분 전" 시간 표시만 갱신 (데이터 재조회 없음 — Realtime으로 처리)
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => clearInterval(id);
@@ -187,19 +211,19 @@ export default function OnlineUsers() {
 
   const handleForceLogout = async () => {
     if (!confirmTarget) return;
+    if (!adminUser?.id) {
+      setResultMsg({ type: 'error', text: '관리자 세션 정보가 없습니다. 다시 로그인해 주세요.' });
+      return;
+    }
     setForceLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (!token) throw new Error('인증 토큰 없음');
-
       const res = await fetch(`${supabaseUrl}/functions/v1/admin-force-logout`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${supabaseAnonKey}`,
         },
-        body: JSON.stringify({ userId: confirmTarget.userId }),
+        body: JSON.stringify({ userId: confirmTarget.userId, adminId: adminUser.id }),
       });
 
       const json = await res.json();
@@ -225,7 +249,18 @@ export default function OnlineUsers() {
     return () => clearTimeout(t);
   }, [resultMsg]);
 
-  const displayed = sessions.filter((s) => {
+  // user_id 기준 최신 세션 1건만 유지 (중복 세션 방어)
+  const deduped = Object.values(
+    sessions.reduce<Record<string, SessionRow>>((acc, s) => {
+      const existing = acc[s.user_id];
+      if (!existing || (s.last_activity_at ?? '') > (existing.last_activity_at ?? '')) {
+        acc[s.user_id] = s;
+      }
+      return acc;
+    }, {})
+  );
+
+  const displayed = deduped.filter((s) => {
     if (!isStillOnline(s)) return false;
     const term = searchTerm.toLowerCase();
     if (!term) return true;
@@ -283,6 +318,15 @@ export default function OnlineUsers() {
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           새로고침
         </button>
+      </div>
+
+      {/* 안내 배너 */}
+      <div className="flex items-start gap-3 px-4 py-3 bg-blue-500/8 border border-blue-500/20 rounded-lg">
+        <RefreshCw size={15} className="text-blue-400 mt-0.5 shrink-0" />
+        <p className="text-sm text-blue-300 leading-relaxed">
+          최신 접속 현황을 확인하려면 우측 상단의 <span className="font-semibold text-blue-200">새로고침</span> 버튼을 클릭해 주세요.
+          목록은 새로고침 시점의 데이터를 기준으로 표시됩니다.
+        </p>
       </div>
 
       {/* 통계 카드 */}
@@ -343,7 +387,7 @@ export default function OnlineUsers() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">아이디</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">닉네임</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">소속 파트너</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">제공사 (게임명)</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">게임명</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">현재 보유금</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">IP 주소</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 whitespace-nowrap">로그인 시간</th>
@@ -375,15 +419,12 @@ export default function OnlineUsers() {
                       ) : <span className="text-slate-600">-</span>}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-sm">
-                      {s.provider_name || s.game_name ? (
-                        <span>
-                          {s.provider_name && <span className="text-slate-400 text-xs mr-1">{s.provider_name}</span>}
-                          {s.game_name && <span className="text-slate-200">{s.game_name}</span>}
-                        </span>
-                      ) : <span className="text-slate-600">-</span>}
+                      {s.game_name
+                        ? <span className="text-slate-200">{s.game_name}</span>
+                        : <span className="text-slate-600">-</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {u ? <BalanceCell userId={u.id} /> : <span className="text-slate-600 text-sm">-</span>}
+                      {u ? <BalanceCell userId={u.id} initialBalance={u.balance} /> : <span className="text-slate-600 text-sm">-</span>}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 font-mono">
                       {s.ip_address ?? <span className="text-slate-600">-</span>}

@@ -8,95 +8,82 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { format } from 'date-fns';
 import { supabase } from '../../../utils/supabase/client';
 
-// 정산 행 인터페이스 (Supabase total_settlement 기반)
 interface SettlementRow {
   date: string;
   level: number;
   levelName: string;
   username: string;
-  // 정산 기준 설정
   casinoRollingRate: number;
   slotRollingRate: number;
   casinoLosingRate: number;
   slotLosingRate: number;
-  losingRate: number; // 단일 루징률 fallback
-  // 공배팅
+  losingRate: number;
   gongBetEnabled: boolean;
   gongBetRate: number;
-  // 보유 자산
   balance: number;
   points: number;
-  // 온라인 입출금
   onlineDeposit: number;
   onlineWithdrawal: number;
-  // 수동 입출금
   manualDeposit: number;
   manualWithdrawal: number;
-  // 포인트 관리
   pointGiven: number;
   pointRecovered: number;
-  // 게임 실적
   casinoBet: number;
   casinoWin: number;
   slotBet: number;
   slotWin: number;
-  // 계산된 값 (DB에서 가져오거나 직접 계산)
   totalRolling: number;
   totalLosing: number;
-  // 코드별 실정산 (개인 실정산)
   individualRolling: number;
   individualLosing: number;
-  // 공배팅 차감
   gongBetCutRolling: number;
 }
 
-// 롤링 계산
+interface DayAccum {
+  onlineDeposit: number;
+  onlineWithdrawal: number;
+  manualDeposit: number;
+  manualWithdrawal: number;
+  pointGiven: number;
+  pointRecovered: number;
+  casinoBet: number;
+  casinoWin: number;
+  slotBet: number;
+  slotWin: number;
+}
+
+function makeDayAccum(): DayAccum {
+  return {
+    onlineDeposit: 0, onlineWithdrawal: 0,
+    manualDeposit: 0, manualWithdrawal: 0,
+    pointGiven: 0, pointRecovered: 0,
+    casinoBet: 0, casinoWin: 0,
+    slotBet: 0, slotWin: 0,
+  };
+}
+
+function isSlotGame(gameType: string | null | undefined): boolean {
+  const t = (gameType || '').toLowerCase();
+  return t.includes('slot') || t.includes('slots');
+}
+
+function toDateStr(ts: string | null | undefined): string {
+  if (!ts) return '';
+  return ts.slice(0, 10);
+}
+
 function calcRolling(casinoBet: number, slotBet: number, casinoRate: number, slotRate: number) {
   return casinoBet * (casinoRate / 100) + slotBet * (slotRate / 100);
 }
 
-// 공배팅 차감 계산
 function calcGongBetCut(totalRolling: number, gongBetEnabled: boolean, gongBetRate: number) {
   return gongBetEnabled ? totalRolling * (gongBetRate / 100) : 0;
 }
 
-// GGR 계산
 function calcGGR(casinoBet: number, casinoWin: number, slotBet: number, slotWin: number) {
   return (casinoBet - casinoWin) + (slotBet - slotWin);
 }
 
-/**
- * 루징 계산
- * rooling_shave.md 기준:
- *   NetGGR = GGR - 정상롤링금
- *   루징정산액 = NetGGR × 루징률
- * logic_analysis.md 기준 (카지노/슬롯 별도):
- *   casinoLosing = (casinoBet - casinoWin) × casinoLosingRate/100
- *   slotLosing   = (slotBet - slotWin)     × slotLosingRate/100
- *   baseLosingAmount = casinoLosing + slotLosing
- *
- * 두 방식이 개념적으로 같지만 카지노/슬롯 별도 루징률이 있을 때는 분리 계산
- */
-function calcLosing(
-  casinoBet: number, casinoWin: number,
-  slotBet: number, slotWin: number,
-  casinoLosingRate: number, slotLosingRate: number,
-  totalRolling: number
-): { casinoLosing: number; slotLosing: number; totalLosing: number; baseLosingAmount: number } {
-  // 카지노/슬롯 별도 루징률 있으면 분리 계산
-  if (casinoLosingRate > 0 || slotLosingRate > 0) {
-    const casinoGGR = Math.max(0, casinoBet - casinoWin);
-    const slotGGR = Math.max(0, slotBet - slotWin);
-    const casinoLosing = casinoGGR * (casinoLosingRate / 100);
-    const slotLosing = slotGGR * (slotLosingRate / 100);
-    const totalLosing = casinoLosing + slotLosing;
-    return { casinoLosing, slotLosing, totalLosing, baseLosingAmount: totalLosing };
-  }
-  // fallback: (GGR - totalRolling) × 루징률 (rooling_shave.md 방식)
-  return { casinoLosing: 0, slotLosing: 0, totalLosing: 0, baseLosingAmount: 0 };
-}
-
-// 레벨별 색상
 function getLevelColor(level: number) {
   const map: Record<number, string> = {
     2: 'bg-red-600/30 text-red-300',
@@ -108,83 +95,187 @@ function getLevelColor(level: number) {
   return map[level] ?? 'bg-gray-600/30 text-gray-300';
 }
 
-// Supabase에서 현재 사용자의 일별 정산 데이터 조회
+// 소스 테이블에서 직접 일일 정산 계산
 async function fetchDailySettlements(
   userId: string,
   startDate: string,
   endDate: string
 ): Promise<{ rows: SettlementRow[]; error: string | null }> {
   try {
-    const { data, error } = await supabase
-      .from('total_settlement')
-      .select('*')
-      .eq('target_user_id', userId)
-      .eq('period_type', 'daily')
-      .gte('settlement_date', startDate)
-      .lte('settlement_date', endDate)
-      .order('settlement_date', { ascending: false });
+    const startTs = startDate + 'T00:00:00';
+    const endTs = endDate + 'T23:59:59';
 
-    if (error) {
-      console.error('일일 정산 조회 실패:', error);
-      return { rows: [], error: error.message || '데이터 조회 실패' };
+    // 사용자 정보 + 파트너 설정 병렬 조회
+    const [userRes, settingsRes] = await Promise.all([
+      supabase.from('users').select('id, username, role, level, balance').eq('id', userId).maybeSingle(),
+      supabase.from('partner_settings').select('casino_rolling_rate, slot_rolling_rate, losing_rate, rolling_shave_enabled, rolling_shave_rate').eq('user_id', userId).maybeSingle(),
+    ]);
+
+    const userRow = userRes.data;
+    const settings = settingsRes.data;
+
+    const casinoRollingRate = Number(settings?.casino_rolling_rate ?? 0);
+    const slotRollingRate = Number(settings?.slot_rolling_rate ?? 0);
+    const losingRate = Number(settings?.losing_rate ?? 0);
+    const gongBetEnabled = settings?.rolling_shave_enabled ?? false;
+    const gongBetRate = Number(settings?.rolling_shave_rate ?? 0);
+
+    // 온라인 입출금 (승인된 거래)
+    const txnRes = await supabase
+      .from('transactions')
+      .select('type, amount, updated_at')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .gte('updated_at', startTs)
+      .lte('updated_at', endTs);
+
+    // 수동 입출금
+    const manualRes = await supabase
+      .from('transaction_manual')
+      .select('type, amount, created_at')
+      .eq('target_user_id', userId)
+      .gte('created_at', startTs)
+      .lte('created_at', endTs);
+
+    // 포인트 내역
+    const pointRes = await supabase
+      .from('points_history')
+      .select('type, amount, created_at')
+      .eq('user_id', userId)
+      .gte('created_at', startTs)
+      .lte('created_at', endTs);
+
+    // 베팅 내역 (invest + honor) 병렬 조회
+    const [investRes, honorRes] = await Promise.all([
+      supabase
+        .from('betting_history_invest')
+        .select('bet_amount, win_amount, game_type, bet_time')
+        .eq('user_id', userId)
+        .gte('bet_time', startTs)
+        .lte('bet_time', endTs),
+      supabase
+        .from('betting_history_honor')
+        .select('bet_amount, win_amount, game_type, bet_time')
+        .eq('user_id', userId)
+        .gte('bet_time', startTs)
+        .lte('bet_time', endTs),
+    ]);
+
+    // 날짜별 데이터 맵 구성
+    const dateMap: Record<string, DayAccum> = {};
+    const getDay = (d: string) => {
+      if (!dateMap[d]) dateMap[d] = makeDayAccum();
+      return dateMap[d];
+    };
+
+    // 온라인 입출금 집계
+    for (const txn of (txnRes.data || [])) {
+      const d = toDateStr(txn.updated_at);
+      if (!d) continue;
+      const day = getDay(d);
+      if (txn.type === 'deposit') day.onlineDeposit += Number(txn.amount);
+      else if (txn.type === 'withdrawal') day.onlineWithdrawal += Number(txn.amount);
     }
 
-    // 사용자 정보 조회 (username 등)
-    const { data: userData } = await supabase
-      .from('users')
-      .select('id, username, role, level')
-      .eq('id', userId)
-      .maybeSingle();
+    // 수동 입출금 집계
+    for (const txn of (manualRes.data || [])) {
+      const d = toDateStr(txn.created_at);
+      if (!d) continue;
+      const day = getDay(d);
+      if (txn.type === 'deposit') day.manualDeposit += Number(txn.amount);
+      else if (txn.type === 'withdrawal') day.manualWithdrawal += Number(txn.amount);
+    }
 
-    const mappedRows = (data || []).map((row: any) => {
-      const casinoRollingRate = row.casino_rolling_rate ?? 0;
-      const slotRollingRate = row.slot_rolling_rate ?? 0;
-      const losingRate = row.losing_rate ?? 0;
+    // 포인트 집계
+    for (const pt of (pointRes.data || [])) {
+      const d = toDateStr(pt.created_at);
+      if (!d) continue;
+      const day = getDay(d);
+      if (pt.type === 'grant' || pt.type === 'add') day.pointGiven += Number(pt.amount);
+      else if (pt.type === 'deduct' || pt.type === 'use') day.pointRecovered += Number(pt.amount);
+    }
 
-      const gongBetEnabled = row.rolling_shave_enabled ?? false;
-      const gongBetRate = row.rolling_shave_rate ?? 0;
-      const gongBetCutRolling = (row.casino_shaved_rolling ?? 0) + (row.slot_shaved_rolling ?? 0);
-      const totalRolling = row.total_rolling ?? 0;
-      const totalLosing = row.total_losing ?? 0;
-      const individualRolling = row.final_rolling ?? totalRolling;
-      const individualLosing = row.final_losing ?? totalLosing;
+    // 베팅 집계 (invest)
+    for (const bet of (investRes.data || [])) {
+      const d = toDateStr(bet.bet_time);
+      if (!d) continue;
+      const day = getDay(d);
+      if (isSlotGame(bet.game_type)) {
+        day.slotBet += Number(bet.bet_amount);
+        day.slotWin += Number(bet.win_amount);
+      } else {
+        day.casinoBet += Number(bet.bet_amount);
+        day.casinoWin += Number(bet.win_amount);
+      }
+    }
 
-      return {
-        date: row.settlement_date,
-        level: userData?.level ?? 0,
-        levelName: userData?.role ?? '',
-        username: userData?.username ?? row.target_user_id,
-        casinoRollingRate,
-        slotRollingRate,
-        casinoLosingRate: 0,
-        slotLosingRate: 0,
-        losingRate,
-        gongBetEnabled,
-        gongBetRate,
-        balance: row.balance ?? 0,
-        points: row.points ?? 0,
-        onlineDeposit: row.online_deposit ?? 0,
-        onlineWithdrawal: row.online_withdrawal ?? 0,
-        manualDeposit: row.manual_deposit ?? 0,
-        manualWithdrawal: row.manual_withdrawal ?? 0,
-        pointGiven: row.points_granted ?? 0,
-        pointRecovered: row.points_deducted ?? 0,
-        casinoBet: row.casino_bet ?? 0,
-        casinoWin: row.casino_win ?? 0,
-        slotBet: row.slot_bet ?? 0,
-        slotWin: row.slot_win ?? 0,
-        totalRolling,
-        totalLosing,
-        individualRolling,
-        individualLosing,
-        gongBetCutRolling,
-      } as SettlementRow;
-    });
-    return { rows: mappedRows, error: null };
+    // 베팅 집계 (honor)
+    for (const bet of (honorRes.data || [])) {
+      const d = toDateStr(bet.bet_time);
+      if (!d) continue;
+      const day = getDay(d);
+      if (isSlotGame(bet.game_type)) {
+        day.slotBet += Number(bet.bet_amount);
+        day.slotWin += Number(bet.win_amount);
+      } else {
+        day.casinoBet += Number(bet.bet_amount);
+        day.casinoWin += Number(bet.win_amount);
+      }
+    }
+
+    // 데이터가 없는 경우 빈 결과
+    if (Object.keys(dateMap).length === 0) {
+      return { rows: [], error: null };
+    }
+
+    // 날짜별 행 생성 (내림차순)
+    const rows: SettlementRow[] = Object.entries(dateMap)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([date, day]) => {
+        const totalRolling = calcRolling(day.casinoBet, day.slotBet, casinoRollingRate, slotRollingRate);
+        const gongBetCutRolling = calcGongBetCut(totalRolling, gongBetEnabled, gongBetRate);
+        const individualRolling = totalRolling - gongBetCutRolling;
+
+        const ggr = calcGGR(day.casinoBet, day.casinoWin, day.slotBet, day.slotWin);
+        const netGGR = ggr - totalRolling;
+        const totalLosing = netGGR > 0 ? netGGR * (losingRate / 100) : 0;
+
+        return {
+          date,
+          level: userRow?.level ?? 0,
+          levelName: userRow?.role ?? '',
+          username: userRow?.username ?? userId,
+          casinoRollingRate,
+          slotRollingRate,
+          casinoLosingRate: 0,
+          slotLosingRate: 0,
+          losingRate,
+          gongBetEnabled,
+          gongBetRate,
+          balance: Number(userRow?.balance ?? 0),
+          points: 0,
+          onlineDeposit: day.onlineDeposit,
+          onlineWithdrawal: day.onlineWithdrawal,
+          manualDeposit: day.manualDeposit,
+          manualWithdrawal: day.manualWithdrawal,
+          pointGiven: day.pointGiven,
+          pointRecovered: day.pointRecovered,
+          casinoBet: day.casinoBet,
+          casinoWin: day.casinoWin,
+          slotBet: day.slotBet,
+          slotWin: day.slotWin,
+          totalRolling,
+          totalLosing,
+          individualRolling,
+          individualLosing: totalLosing,
+          gongBetCutRolling,
+        } as SettlementRow;
+      });
+
+    return { rows, error: null };
   } catch (err: any) {
-    const msg = err?.message ?? String(err);
     console.error('fetchDailySettlements 오류:', err);
-    return { rows: [], error: msg };
+    return { rows: [], error: err?.message ?? String(err) };
   }
 }
 
@@ -195,14 +286,12 @@ export default function DailySettlement() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showSettingColumns, setShowSettingColumns] = useState(true);
 
-  // 공배팅 컬럼: 시스템관리자·운영사만 볼 수 있고, 활성화된 데이터가 있을 때만 표시
   const canSeeGongBet = user?.role === 'system_admin' || user?.role === 'operator';
   const hasGongBetActive = rows.some(r => r.gongBetEnabled);
   const showGongBetColumn = canSeeGongBet && hasGongBetActive;
   const [startOpen, setStartOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
 
-  // 오늘 날짜 기준
   const today = new Date();
   const [startDate, setStartDate] = useState<Date>(today);
   const [endDate, setEndDate] = useState<Date>(today);
@@ -226,7 +315,6 @@ export default function DailySettlement() {
     loadData();
   }, [user, startDate, endDate]);
 
-  // 입출차액: (온라인입금 + 수동입금) - (온라인출금 + 수동출금)
   const calcDepositDiff = (row: SettlementRow) =>
     (row.onlineDeposit + row.manualDeposit) - (row.onlineWithdrawal + row.manualWithdrawal);
 
@@ -259,7 +347,6 @@ export default function DailySettlement() {
 
       <Card className="bg-slate-800 border-slate-700 p-4">
         <div className="flex gap-4 items-center flex-wrap">
-          {/* 시작일 */}
           <div className="flex items-center gap-2">
             <span className="text-slate-300 text-sm">시작일:</span>
             <Popover open={startOpen} onOpenChange={setStartOpen}>
@@ -280,7 +367,6 @@ export default function DailySettlement() {
             </Popover>
           </div>
 
-          {/* 종료일 */}
           <div className="flex items-center gap-2">
             <span className="text-slate-300 text-sm">종료일:</span>
             <Popover open={endOpen} onOpenChange={setEndOpen}>
@@ -301,60 +387,14 @@ export default function DailySettlement() {
             </Popover>
           </div>
 
-          {/* 빠른 선택 버튼 */}
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => { const d = new Date(); setStartDate(d); setEndDate(d); }}
-            >
-              오늘
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const d = new Date();
-                d.setDate(d.getDate() - 1);
-                setStartDate(d);
-                setEndDate(d);
-              }}
-            >
-              어제
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const end = new Date();
-                const start = new Date();
-                start.setDate(start.getDate() - 6);
-                setStartDate(start);
-                setEndDate(end);
-              }}
-            >
-              최근 7일
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const now = new Date();
-                const start = new Date(now.getFullYear(), now.getMonth(), 1);
-                const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-                setStartDate(start);
-                setEndDate(end);
-              }}
-            >
-              이번 달
-            </Button>
+            <Button variant="outline" size="sm" onClick={() => { const d = new Date(); setStartDate(d); setEndDate(d); }}>오늘</Button>
+            <Button variant="outline" size="sm" onClick={() => { const d = new Date(); d.setDate(d.getDate() - 1); setStartDate(d); setEndDate(d); }}>어제</Button>
+            <Button variant="outline" size="sm" onClick={() => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); setStartDate(start); setEndDate(end); }}>최근 7일</Button>
+            <Button variant="outline" size="sm" onClick={() => { const now = new Date(); setStartDate(new Date(now.getFullYear(), now.getMonth(), 1)); setEndDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)); }}>이번 달</Button>
           </div>
 
-          <Button
-            onClick={loadData}
-            disabled={loading}
-            className="flex items-center gap-2"
-          >
+          <Button onClick={loadData} disabled={loading} className="flex items-center gap-2">
             {loading && <Loader2 size={16} className="animate-spin" />}
             새로고침
           </Button>
@@ -375,16 +415,13 @@ export default function DailySettlement() {
           <p className="text-sm text-red-300">
             <span className="font-bold">조회 오류:</span> {fetchError}
           </p>
-          <p className="text-xs text-red-400 mt-1">
-            테이블이 존재하지 않거나 네트워크 연결을 확인하세요.
-          </p>
         </div>
       )}
 
       <div className="bg-blue-900/20 border border-blue-700/40 rounded-lg px-4 py-3">
         <p className="text-sm text-blue-300">
           💡 <span className="font-bold">루징 계산 원칙:</span>{' '}
-          NetGGR = GGR − 정상롤링금 → 루징정산액 = NetGGR × 루징률 (rooling_shave.md 기준).
+          NetGGR = GGR − 정상롤링금 → 루징정산액 = NetGGR × 루징률.
           카지노/슬롯 루징률이 각각 설정된 경우 분리 계산.
         </p>
       </div>
@@ -466,7 +503,7 @@ export default function DailySettlement() {
                 </tr>
               </thead>
               <tbody>
-                {!Array.isArray(rows) || rows.length === 0 ? (
+                {rows.length === 0 ? (
                   <tr>
                     <td colSpan={99} className="px-6 py-10 text-center text-slate-500">
                       선택한 기간에 정산 데이터가 없습니다.
@@ -523,10 +560,8 @@ export default function DailySettlement() {
                         <td className="px-4 py-3 text-right text-yellow-400 font-bold border-l-2 border-slate-700 bg-orange-900/10">
                           {w(ggr)}
                         </td>
-                        {/* 실정산 (총): DB에서 가져온 값 */}
                         <td className="px-4 py-3 text-right text-green-400 font-bold border-l-2 border-slate-700 bg-pink-900/10">{w(row.totalRolling)}</td>
                         <td className="px-4 py-3 text-right text-purple-400 font-bold bg-pink-900/10">{w(row.totalLosing)}</td>
-                        {/* 코드별 실정산: individualRolling = totalRolling - gongBetCut, individualLosing = NetGGR × rate */}
                         <td className="px-4 py-3 text-right text-green-300 font-bold border-l-2 border-slate-700 bg-emerald-900/10">{w(row.individualRolling)}</td>
                         <td className="px-4 py-3 text-right text-purple-300 font-bold bg-emerald-900/10">{w(row.individualLosing)}</td>
                       </tr>
@@ -539,7 +574,6 @@ export default function DailySettlement() {
         </Card>
       )}
 
-      {/* 계산 방식 설명 */}
       <Card className="bg-slate-800 border-slate-700 p-6">
         <h3 className="text-lg font-bold text-slate-100 mb-4">정산 계산 방식</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
@@ -552,7 +586,7 @@ export default function DailySettlement() {
             </div>
           </div>
           <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
-            <h4 className="text-purple-400 font-bold mb-2">루징 계산 (rooling_shave.md 기준)</h4>
+            <h4 className="text-purple-400 font-bold mb-2">루징 계산</h4>
             <div className="space-y-1 text-slate-300">
               <p>• GGR = (카지노베팅 − 카지노당첨) + (슬롯베팅 − 슬롯당첨)</p>
               <p>• NetGGR = GGR − 정상롤링금</p>

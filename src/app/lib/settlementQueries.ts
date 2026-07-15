@@ -1,14 +1,16 @@
 /**
  * 통합 정산 조회 유틸리티
  *
- * 조직 격리 구조를 활용한 정산 데이터 조회 함수들
+ * total_settlement 테이블 대신 소스 테이블에서 직접 계산합니다:
+ *   - transactions (온라인 입출금)
+ *   - transaction_manual (수동 입출금)
+ *   - betting_history_invest / betting_history_honor (게임 실적)
+ *   - partner_settings (롤링/루징 요율)
+ *   - users (잔액, 계층)
  */
 
 import { supabase } from '../../../utils/supabase/client';
 
-/**
- * 정산 데이터 인터페이스
- */
 export interface Settlement {
   id: string;
   target_user_id: string;
@@ -28,9 +30,6 @@ export interface Settlement {
   points?: number;
 }
 
-/**
- * 통합 정산 상세 데이터 인터페이스
- */
 export interface DetailedSettlement extends Settlement {
   casino_rolling_rate: number;
   slot_rolling_rate: number;
@@ -52,9 +51,6 @@ export interface DetailedSettlement extends Settlement {
   final_losing: number;
 }
 
-/**
- * 조회 옵션
- */
 export interface SettlementQueryOptions {
   startDate?: string;
   endDate?: string;
@@ -62,321 +58,6 @@ export interface SettlementQueryOptions {
   targetRole?: string;
 }
 
-/**
- * 하위 계층 통합 정산 조회 (RPC 함수 사용 - 권장)
- *
- * @param viewerId - 조회자 사용자 ID
- * @param options - 조회 옵션
- * @returns 정산 데이터 배열
- */
-export async function getSubordinateSettlements(
-  viewerId: string,
-  options: SettlementQueryOptions = {}
-): Promise<Settlement[]> {
-  const {
-    startDate = null,
-    endDate = null,
-    periodType = 'daily'
-  } = options;
-
-  try {
-    const { data, error } = await supabase.rpc('get_subordinate_settlements', {
-      p_viewer_id: viewerId,
-      p_start_date: startDate,
-      p_end_date: endDate,
-      p_period_type: periodType
-    });
-
-    if (error) {
-      console.error('정산 데이터 조회 실패:', error);
-      throw error;
-    }
-
-    return data || [];
-  } catch (error) {
-    console.error('getSubordinateSettlements 오류:', error);
-    return [];
-  }
-}
-
-/**
- * 하위 계층 통합 정산 조회 (RLS 활용)
- *
- * Supabase RLS가 자동으로 조직 격리를 적용합니다.
- * 현재 로그인한 사용자는 자신의 권한 범위 내 데이터만 조회 가능합니다.
- *
- * @param options - 조회 옵션
- * @returns 정산 데이터 배열
- */
-export async function getSettlementsWithRLS(
-  options: SettlementQueryOptions = {}
-): Promise<Settlement[]> {
-  const {
-    startDate,
-    endDate,
-    periodType = 'daily',
-    targetRole
-  } = options;
-
-  try {
-    let query = supabase
-      .from('total_settlement')
-      .select(`
-        id,
-        target_user_id,
-        target_role,
-        settlement_date,
-        final_settlement,
-        total_rolling,
-        total_losing,
-        total_ggr,
-        deposit_withdrawal_diff,
-        casino_bet,
-        casino_win,
-        slot_bet,
-        slot_win,
-        balance,
-        points,
-        users!target_user_id(username)
-      `)
-      .eq('period_type', periodType)
-      .order('settlement_date', { ascending: false });
-
-    if (startDate) {
-      query = query.gte('settlement_date', startDate);
-    }
-
-    if (endDate) {
-      query = query.lte('settlement_date', endDate);
-    }
-
-    if (targetRole) {
-      query = query.eq('target_role', targetRole);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('정산 데이터 조회 실패:', error);
-      throw error;
-    }
-
-    // 데이터 변환
-    return (data || []).map((row: any) => ({
-      ...row,
-      target_username: row.users?.username || 'Unknown'
-    }));
-  } catch (error) {
-    console.error('getSettlementsWithRLS 오류:', error);
-    return [];
-  }
-}
-
-/**
- * 통합 정산 상세 데이터 조회
- *
- * @param settlementId - 정산 ID
- * @returns 상세 정산 데이터
- */
-export async function getSettlementDetail(
-  settlementId: string
-): Promise<DetailedSettlement | null> {
-  try {
-    const { data, error } = await supabase
-      .from('total_settlement')
-      .select(`
-        *,
-        users!target_user_id(username)
-      `)
-      .eq('id', settlementId)
-      .maybeSingle();
-
-    if (error) {
-      console.error('정산 상세 데이터 조회 실패:', error);
-      throw error;
-    }
-
-    if (!data) return null;
-
-    return {
-      ...data,
-      target_username: data.users?.username || 'Unknown'
-    };
-  } catch (error) {
-    console.error('getSettlementDetail 오류:', error);
-    return null;
-  }
-}
-
-/**
- * 특정 사용자의 정산 데이터 조회
- *
- * @param userId - 사용자 ID
- * @param startDate - 시작 날짜
- * @param endDate - 종료 날짜
- * @param periodType - 기간 타입
- * @returns 정산 데이터 배열
- */
-export async function getUserSettlements(
-  userId: string,
-  startDate?: string,
-  endDate?: string,
-  periodType: 'daily' | 'weekly' | 'monthly' = 'daily'
-): Promise<Settlement[]> {
-  try {
-    let query = supabase
-      .from('total_settlement')
-      .select(`
-        id,
-        target_user_id,
-        target_role,
-        settlement_date,
-        final_settlement,
-        total_rolling,
-        total_losing,
-        total_ggr,
-        deposit_withdrawal_diff,
-        users!target_user_id(username)
-      `)
-      .eq('target_user_id', userId)
-      .eq('period_type', periodType)
-      .order('settlement_date', { ascending: false });
-
-    if (startDate) {
-      query = query.gte('settlement_date', startDate);
-    }
-
-    if (endDate) {
-      query = query.lte('settlement_date', endDate);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('사용자 정산 데이터 조회 실패:', error);
-      throw error;
-    }
-
-    return (data || []).map((row: any) => ({
-      ...row,
-      target_username: row.users?.username || 'Unknown'
-    }));
-  } catch (error) {
-    console.error('getUserSettlements 오류:', error);
-    return [];
-  }
-}
-
-/**
- * 정산 데이터 요약 통계 조회
- *
- * @param viewerId - 조회자 사용자 ID
- * @param startDate - 시작 날짜
- * @param endDate - 종료 날짜
- * @returns 요약 통계
- */
-export async function getSettlementSummary(
-  viewerId: string,
-  startDate?: string,
-  endDate?: string
-) {
-  try {
-    const settlements = await getSubordinateSettlements(viewerId, {
-      startDate,
-      endDate,
-      periodType: 'daily'
-    });
-
-    const summary = settlements.reduce(
-      (acc, settlement) => ({
-        totalSettlement: acc.totalSettlement + (settlement.final_settlement || 0),
-        totalRolling: acc.totalRolling + (settlement.total_rolling || 0),
-        totalLosing: acc.totalLosing + (settlement.total_losing || 0),
-        totalGGR: acc.totalGGR + (settlement.total_ggr || 0),
-        totalDepositWithdrawalDiff: acc.totalDepositWithdrawalDiff + (settlement.deposit_withdrawal_diff || 0),
-        count: acc.count + 1
-      }),
-      {
-        totalSettlement: 0,
-        totalRolling: 0,
-        totalLosing: 0,
-        totalGGR: 0,
-        totalDepositWithdrawalDiff: 0,
-        count: 0
-      }
-    );
-
-    return summary;
-  } catch (error) {
-    console.error('getSettlementSummary 오류:', error);
-    return {
-      totalSettlement: 0,
-      totalRolling: 0,
-      totalLosing: 0,
-      totalGGR: 0,
-      totalDepositWithdrawalDiff: 0,
-      count: 0
-    };
-  }
-}
-
-/**
- * 역할별 정산 데이터 집계
- *
- * @param viewerId - 조회자 사용자 ID
- * @param startDate - 시작 날짜
- * @param endDate - 종료 날짜
- * @returns 역할별 집계 데이터
- */
-export async function getSettlementsByRole(
-  viewerId: string,
-  startDate?: string,
-  endDate?: string
-) {
-  try {
-    const settlements = await getSubordinateSettlements(viewerId, {
-      startDate,
-      endDate,
-      periodType: 'daily'
-    });
-
-    const byRole: Record<string, {
-      totalSettlement: number;
-      totalRolling: number;
-      totalLosing: number;
-      totalGGR: number;
-      count: number;
-    }> = {};
-
-    settlements.forEach(settlement => {
-      const role = settlement.target_role;
-      if (!byRole[role]) {
-        byRole[role] = {
-          totalSettlement: 0,
-          totalRolling: 0,
-          totalLosing: 0,
-          totalGGR: 0,
-          count: 0
-        };
-      }
-
-      byRole[role].totalSettlement += settlement.final_settlement || 0;
-      byRole[role].totalRolling += settlement.total_rolling || 0;
-      byRole[role].totalLosing += settlement.total_losing || 0;
-      byRole[role].totalGGR += settlement.total_ggr || 0;
-      byRole[role].count += 1;
-    });
-
-    return byRole;
-  } catch (error) {
-    console.error('getSettlementsByRole 오류:', error);
-    return {};
-  }
-}
-
-/**
- * 트리 구조 정산 노드
- */
 export interface SettlementTreeNode extends Settlement {
   children: SettlementTreeNode[];
   parent_id: string | null;
@@ -384,11 +65,9 @@ export interface SettlementTreeNode extends Settlement {
   isExpanded?: boolean;
   rolling_shave_enabled?: boolean;
   rolling_shave_rate?: number;
-  // 정산기준설정
   casino_rolling_rate?: number;
   slot_rolling_rate?: number;
   losing_rate?: number;
-  // 상세 입출금
   online_deposit?: number;
   online_withdrawal?: number;
   manual_deposit?: number;
@@ -397,243 +76,317 @@ export interface SettlementTreeNode extends Settlement {
   partner_withdrawal?: number;
   points_granted?: number;
   points_deducted?: number;
-  // 공배팅 롤링 상세
-  casino_normal_rolling?: number;  // 공배팅 전 카지노 정상 롤링
-  slot_normal_rolling?: number;    // 공배팅 전 슬롯 정상 롤링
-  casino_shaved_rolling?: number;  // 카지노 공배팅 절삭액
-  slot_shaved_rolling?: number;    // 슬롯 공배팅 절삭액
-  // NetGGR = GGR - 정상롤링금 (루징 계산 기준)
+  casino_normal_rolling?: number;
+  slot_normal_rolling?: number;
+  casino_shaved_rolling?: number;
+  slot_shaved_rolling?: number;
   net_ggr?: number;
-  // 코드별 실정산 (= final_rolling / final_losing from DB)
-  // final_rolling: 직속 자식 롤링 차감 후 개인 실정산 롤링
-  // final_losing: 두 번째 패스 후 개인 실정산 루징
   code_rolling?: number;
   code_losing?: number;
 }
 
+interface UserAccum {
+  onlineDeposit: number;
+  onlineWithdrawal: number;
+  manualDeposit: number;
+  manualWithdrawal: number;
+  pointsGranted: number;
+  pointsDeducted: number;
+  casinoBet: number;
+  casinoWin: number;
+  slotBet: number;
+  slotWin: number;
+}
+
+function makeAccum(): UserAccum {
+  return {
+    onlineDeposit: 0, onlineWithdrawal: 0,
+    manualDeposit: 0, manualWithdrawal: 0,
+    pointsGranted: 0, pointsDeducted: 0,
+    casinoBet: 0, casinoWin: 0,
+    slotBet: 0, slotWin: 0,
+  };
+}
+
+function isSlotGame(gameType: string | null | undefined): boolean {
+  const t = (gameType || '').toLowerCase();
+  return t.includes('slot') || t.includes('slots');
+}
+
 /**
- * 하위 계층 정산을 트리 구조로 변환
- *
- * @param viewerId - 조회자 사용자 ID
- * @param options - 조회 옵션
- * @returns 트리 구조 정산 데이터
+ * 하위 계층 정산을 트리 구조로 반환 (소스 테이블에서 직접 계산)
  */
 export async function getSettlementTree(
   viewerId: string,
   options: SettlementQueryOptions = {}
 ): Promise<SettlementTreeNode[]> {
   try {
-    // 1. 사용자 계층 정보 조회
-    const { data: userData, error: userError } = await supabase
+    const { startDate, endDate } = options;
+    const startTs = startDate ? startDate + 'T00:00:00' : undefined;
+    const endTs = endDate ? endDate + 'T23:59:59' : undefined;
+
+    // 1. 조회자 정보
+    const { data: viewerData } = await supabase
       .from('users')
       .select('id, username, role, parent_id, hierarchy_path, depth')
       .eq('id', viewerId)
       .maybeSingle();
 
-    if (userError) {
-      console.error('사용자 정보 조회 실패:', userError);
-      return [];
-    }
+    const effectiveRole = viewerData?.role ?? 'system_admin';
 
-    // userData가 없으면 system_admin으로 간주하여 전체 조회
-    const effectiveUser = userData ?? { id: viewerId, role: 'system_admin', hierarchy_path: [], depth: 0 };
-
-    // 2. 하위 계층 사용자 모두 조회
+    // 2. 하위 사용자 목록 조회 (조직 격리)
     let usersQuery = supabase
       .from('users')
-      .select('id, username, role, parent_id, hierarchy_path, depth')
+      .select('id, username, role, parent_id, depth, balance')
       .order('depth', { ascending: true })
       .order('username', { ascending: true });
 
-    // 조직 격리: 시스템 관리자가 아니면 자신의 하위만
-    if (effectiveUser.role !== 'system_admin') {
+    if (effectiveRole !== 'system_admin') {
       usersQuery = usersQuery.or(`id.eq.${viewerId},hierarchy_path.cs.{${viewerId}}`);
     }
 
     const { data: users, error: usersError } = await usersQuery;
+    if (usersError || !users || users.length === 0) return [];
 
-    if (usersError) {
-      console.error('하위 사용자 조회 실패:', usersError);
-      return [];
-    }
-
-    if (!users || users.length === 0) {
-      return [];
-    }
-
-    // 3. 각 사용자의 정산 데이터 조회
     const userIds = users.map(u => u.id);
-    const {
-      startDate,
-      endDate,
-      periodType = 'daily'
-    } = options;
 
-    let settlementsQuery = supabase
-      .from('total_settlement')
-      .select('*')
-      .in('target_user_id', userIds)
-      .eq('period_type', periodType)
-      .order('settlement_date', { ascending: false });
+    // 3. 파트너 설정 (요율) 일괄 조회
+    const { data: settingsRows } = await supabase
+      .from('partner_settings')
+      .select('user_id, casino_rolling_rate, slot_rolling_rate, losing_rate, rolling_shave_enabled, rolling_shave_rate')
+      .in('user_id', userIds);
 
-    if (startDate) {
-      settlementsQuery = settlementsQuery.gte('settlement_date', startDate);
+    const settingsMap: Record<string, any> = {};
+    for (const s of (settingsRows || [])) {
+      settingsMap[s.user_id] = s;
     }
 
-    if (endDate) {
-      settlementsQuery = settlementsQuery.lte('settlement_date', endDate);
+    // 4. 온라인 거래 (승인된 입출금) 조회
+    let txnQuery = supabase
+      .from('transactions')
+      .select('user_id, type, amount, updated_at')
+      .in('user_id', userIds)
+      .eq('status', 'approved');
+    if (startTs) txnQuery = txnQuery.gte('updated_at', startTs);
+    if (endTs) txnQuery = txnQuery.lte('updated_at', endTs);
+    const { data: txns } = await txnQuery;
+
+    // 5. 수동 거래 조회
+    let manualQuery = supabase
+      .from('transaction_manual')
+      .select('target_user_id, type, amount, created_at')
+      .in('target_user_id', userIds);
+    if (startTs) manualQuery = manualQuery.gte('created_at', startTs);
+    if (endTs) manualQuery = manualQuery.lte('created_at', endTs);
+    const { data: manuals } = await manualQuery;
+
+    // 6. 베팅 내역 (invest + honor) 병렬 조회
+    let investQuery = supabase
+      .from('betting_history_invest')
+      .select('user_id, bet_amount, win_amount, game_type, bet_time')
+      .in('user_id', userIds);
+    if (startTs) investQuery = investQuery.gte('bet_time', startTs);
+    if (endTs) investQuery = investQuery.lte('bet_time', endTs);
+
+    let honorQuery = supabase
+      .from('betting_history_honor')
+      .select('user_id, bet_amount, win_amount, game_type, bet_time')
+      .in('user_id', userIds);
+    if (startTs) honorQuery = honorQuery.gte('bet_time', startTs);
+    if (endTs) honorQuery = honorQuery.lte('bet_time', endTs);
+
+    const [investRes, honorRes] = await Promise.all([investQuery, honorQuery]);
+
+    // 7. 유저별 집계
+    const accumMap: Record<string, UserAccum> = {};
+    const getAccum = (uid: string) => {
+      if (!accumMap[uid]) accumMap[uid] = makeAccum();
+      return accumMap[uid];
+    };
+
+    for (const txn of (txns || [])) {
+      const a = getAccum(txn.user_id);
+      if (txn.type === 'deposit') a.onlineDeposit += Number(txn.amount);
+      else if (txn.type === 'withdrawal') a.onlineWithdrawal += Number(txn.amount);
     }
 
-    const { data: settlements, error: settlementsError } = await settlementsQuery;
-
-    if (settlementsError) {
-      console.error('정산 데이터 조회 실패:', settlementsError);
-      return [];
+    for (const txn of (manuals || [])) {
+      const a = getAccum(txn.target_user_id);
+      if (txn.type === 'deposit') a.manualDeposit += Number(txn.amount);
+      else if (txn.type === 'withdrawal') a.manualWithdrawal += Number(txn.amount);
     }
 
-    // 4. 사용자별 정산 데이터 집계 (같은 사용자의 여러 날짜 데이터 합산)
-    const settlementByUser: Record<string, any> = {};
-
-    (settlements || []).forEach((s: any) => {
-      const userId = s.target_user_id;
-      if (!settlementByUser[userId]) {
-        settlementByUser[userId] = {
-          target_user_id: userId,
-          final_settlement: 0,
-          total_rolling: 0,
-          total_losing: 0,
-          total_ggr: 0,
-          net_ggr: 0,
-          deposit_withdrawal_diff: 0,
-          casino_bet: 0,
-          casino_win: 0,
-          slot_bet: 0,
-          slot_win: 0,
-          balance: 0,
-          points: 0,
-          online_deposit: 0,
-          online_withdrawal: 0,
-          manual_deposit: 0,
-          manual_withdrawal: 0,
-          partner_deposit: 0,
-          partner_withdrawal: 0,
-          points_granted: 0,
-          points_deducted: 0,
-          casino_normal_rolling: 0,
-          slot_normal_rolling: 0,
-          casino_shaved_rolling: 0,
-          slot_shaved_rolling: 0,
-          final_rolling: 0,
-          final_losing: 0,
-          casino_rolling_rate: 0,
-          slot_rolling_rate: 0,
-          losing_rate: 0,
-          rolling_shave_enabled: false,
-          rolling_shave_rate: 0,
-          count: 0
-        };
+    const processBets = (bets: any[]) => {
+      for (const bet of bets) {
+        const a = getAccum(bet.user_id);
+        if (isSlotGame(bet.game_type)) {
+          a.slotBet += Number(bet.bet_amount);
+          a.slotWin += Number(bet.win_amount);
+        } else {
+          a.casinoBet += Number(bet.bet_amount);
+          a.casinoWin += Number(bet.win_amount);
+        }
       }
+    };
 
-      settlementByUser[userId].final_settlement += s.final_settlement || 0;
-      settlementByUser[userId].total_rolling += s.total_rolling || 0;
-      settlementByUser[userId].total_losing += s.total_losing || 0;
-      settlementByUser[userId].total_ggr += s.total_ggr || 0;
-      settlementByUser[userId].net_ggr += s.net_ggr || 0;
-      settlementByUser[userId].deposit_withdrawal_diff += s.deposit_withdrawal_diff || 0;
-      settlementByUser[userId].casino_bet += s.casino_bet || 0;
-      settlementByUser[userId].casino_win += s.casino_win || 0;
-      settlementByUser[userId].slot_bet += s.slot_bet || 0;
-      settlementByUser[userId].slot_win += s.slot_win || 0;
-      settlementByUser[userId].online_deposit += s.online_deposit || 0;
-      settlementByUser[userId].online_withdrawal += s.online_withdrawal || 0;
-      settlementByUser[userId].manual_deposit += s.manual_deposit || 0;
-      settlementByUser[userId].manual_withdrawal += s.manual_withdrawal || 0;
-      settlementByUser[userId].partner_deposit += s.partner_deposit || 0;
-      settlementByUser[userId].partner_withdrawal += s.partner_withdrawal || 0;
-      settlementByUser[userId].points_granted += s.points_granted || 0;
-      settlementByUser[userId].points_deducted += s.points_deducted || 0;
-      settlementByUser[userId].casino_normal_rolling += s.casino_normal_rolling || 0;
-      settlementByUser[userId].slot_normal_rolling += s.slot_normal_rolling || 0;
-      settlementByUser[userId].casino_shaved_rolling += s.casino_shaved_rolling || 0;
-      settlementByUser[userId].slot_shaved_rolling += s.slot_shaved_rolling || 0;
-      // final_rolling / final_losing: DB가 이미 직속 자식 차감 후 계산된 값
-      settlementByUser[userId].final_rolling += s.final_rolling || 0;
-      settlementByUser[userId].final_losing += s.final_losing || 0;
-      settlementByUser[userId].balance = s.balance || 0;
-      settlementByUser[userId].points = s.points || 0;
-      settlementByUser[userId].casino_rolling_rate = s.casino_rolling_rate || 0;
-      settlementByUser[userId].slot_rolling_rate = s.slot_rolling_rate || 0;
-      settlementByUser[userId].losing_rate = s.losing_rate || 0;
-      settlementByUser[userId].rolling_shave_enabled = s.rolling_shave_enabled ?? false;
-      settlementByUser[userId].rolling_shave_rate = s.rolling_shave_rate || 0;
-      settlementByUser[userId].count += 1;
-    });
+    processBets(investRes.data || []);
+    processBets(honorRes.data || []);
 
-    // 5. 트리 노드 생성
+    // 8. 트리 노드 생성
     const nodeMap: Record<string, SettlementTreeNode> = {};
 
-    users.forEach(user => {
-      const s = settlementByUser[user.id];
+    for (const user of users) {
+      const a = accumMap[user.id] ?? makeAccum();
+      const s = settingsMap[user.id];
+
+      const casinoRollingRate = Number(s?.casino_rolling_rate ?? 0);
+      const slotRollingRate = Number(s?.slot_rolling_rate ?? 0);
+      const losingRate = Number(s?.losing_rate ?? 0);
+      const gongBetEnabled = s?.rolling_shave_enabled ?? false;
+      const gongBetRate = Number(s?.rolling_shave_rate ?? 0);
+
+      const casinoNormalRolling = a.casinoBet * (casinoRollingRate / 100);
+      const slotNormalRolling = a.slotBet * (slotRollingRate / 100);
+      const totalRolling = casinoNormalRolling + slotNormalRolling;
+
+      const casinoShavedRolling = gongBetEnabled ? casinoNormalRolling * (gongBetRate / 100) : 0;
+      const slotShavedRolling = gongBetEnabled ? slotNormalRolling * (gongBetRate / 100) : 0;
+      const finalRolling = totalRolling - casinoShavedRolling - slotShavedRolling;
+
+      const ggr = (a.casinoBet - a.casinoWin) + (a.slotBet - a.slotWin);
+      const netGGR = ggr - totalRolling;
+      const totalLosing = netGGR > 0 ? netGGR * (losingRate / 100) : 0;
+
+      const depositDiff = (a.onlineDeposit + a.manualDeposit) - (a.onlineWithdrawal + a.manualWithdrawal);
+
       nodeMap[user.id] = {
         id: user.id,
         target_user_id: user.id,
         target_username: user.username,
         target_role: user.role,
         settlement_date: '',
-        final_settlement: s?.final_settlement || 0,
-        total_rolling: s?.total_rolling || 0,
-        total_losing: s?.total_losing || 0,
-        total_ggr: s?.total_ggr || 0,
-        deposit_withdrawal_diff: s?.deposit_withdrawal_diff || 0,
-        casino_bet: s?.casino_bet || 0,
-        casino_win: s?.casino_win || 0,
-        slot_bet: s?.slot_bet || 0,
-        slot_win: s?.slot_win || 0,
-        balance: s?.balance || 0,
-        points: s?.points || 0,
-        online_deposit: s?.online_deposit || 0,
-        online_withdrawal: s?.online_withdrawal || 0,
-        manual_deposit: s?.manual_deposit || 0,
-        manual_withdrawal: s?.manual_withdrawal || 0,
-        partner_deposit: s?.partner_deposit || 0,
-        partner_withdrawal: s?.partner_withdrawal || 0,
-        points_granted: s?.points_granted || 0,
-        points_deducted: s?.points_deducted || 0,
-        casino_rolling_rate: s?.casino_rolling_rate || 0,
-        slot_rolling_rate: s?.slot_rolling_rate || 0,
-        losing_rate: s?.losing_rate || 0,
-        rolling_shave_enabled: s?.rolling_shave_enabled ?? false,
-        rolling_shave_rate: s?.rolling_shave_rate || 0,
-        casino_normal_rolling: s?.casino_normal_rolling || 0,
-        slot_normal_rolling: s?.slot_normal_rolling || 0,
-        casino_shaved_rolling: s?.casino_shaved_rolling || 0,
-        slot_shaved_rolling: s?.slot_shaved_rolling || 0,
-        net_ggr: s?.net_ggr || 0,
-        // code_rolling = final_rolling: DB가 직속 자식 차감 후 계산한 개인 실정산 롤링
-        // code_losing  = final_losing:  DB가 두 번째 패스 후 계산한 개인 실정산 루징
-        code_rolling: s?.final_rolling || 0,
-        code_losing: s?.final_losing || 0,
+        final_settlement: finalRolling + totalLosing,
+        total_rolling: totalRolling,
+        total_losing: totalLosing,
+        total_ggr: ggr,
+        deposit_withdrawal_diff: depositDiff,
+        casino_bet: a.casinoBet,
+        casino_win: a.casinoWin,
+        slot_bet: a.slotBet,
+        slot_win: a.slotWin,
+        balance: Number(user.balance ?? 0),
+        points: 0,
+        // 설정
+        casino_rolling_rate: casinoRollingRate,
+        slot_rolling_rate: slotRollingRate,
+        losing_rate: losingRate,
+        rolling_shave_enabled: gongBetEnabled,
+        rolling_shave_rate: gongBetRate,
+        // 입출금
+        online_deposit: a.onlineDeposit,
+        online_withdrawal: a.onlineWithdrawal,
+        manual_deposit: a.manualDeposit,
+        manual_withdrawal: a.manualWithdrawal,
+        partner_deposit: 0,
+        partner_withdrawal: 0,
+        points_granted: a.pointsGranted,
+        points_deducted: a.pointsDeducted,
+        // 롤링 상세
+        casino_normal_rolling: casinoNormalRolling,
+        slot_normal_rolling: slotNormalRolling,
+        casino_shaved_rolling: casinoShavedRolling,
+        slot_shaved_rolling: slotShavedRolling,
+        net_ggr: netGGR,
+        code_rolling: finalRolling,
+        code_losing: totalLosing,
         children: [],
         parent_id: user.parent_id,
         depth: user.depth,
-        isExpanded: false
+        isExpanded: false,
       };
-    });
+    }
 
-    // 6. 트리 구조 구성
+    // 9. 트리 구조 구성
     const rootNodes: SettlementTreeNode[] = [];
-
-    Object.values(nodeMap).forEach(node => {
+    for (const node of Object.values(nodeMap)) {
       if (node.parent_id && nodeMap[node.parent_id]) {
         nodeMap[node.parent_id].children.push(node);
       } else {
         rootNodes.push(node);
       }
-    });
+    }
 
     return rootNodes;
   } catch (error) {
     console.error('getSettlementTree 오류:', error);
     return [];
   }
+}
+
+// 하위 호환을 위한 래퍼 함수들 (total_settlement 기반 — 레거시)
+export async function getSubordinateSettlements(
+  viewerId: string,
+  options: SettlementQueryOptions = {}
+): Promise<Settlement[]> {
+  const tree = await getSettlementTree(viewerId, options);
+  const flatten = (nodes: SettlementTreeNode[]): Settlement[] =>
+    nodes.flatMap(n => [n as Settlement, ...flatten(n.children)]);
+  return flatten(tree);
+}
+
+export async function getSettlementsWithRLS(
+  options: SettlementQueryOptions = {}
+): Promise<Settlement[]> {
+  const { data: viewer } = await supabase.auth.getUser();
+  if (!viewer?.user?.id) return [];
+  return getSubordinateSettlements(viewer.user.id, options);
+}
+
+export async function getUserSettlements(
+  userId: string,
+  startDate?: string,
+  endDate?: string,
+  periodType: 'daily' | 'weekly' | 'monthly' = 'daily'
+): Promise<Settlement[]> {
+  const tree = await getSettlementTree(userId, { startDate, endDate, periodType });
+  const self = tree.find(n => n.target_user_id === userId);
+  return self ? [self] : (tree.length > 0 ? [tree[0]] : []);
+}
+
+export async function getSettlementSummary(
+  viewerId: string,
+  startDate?: string,
+  endDate?: string
+) {
+  const settlements = await getSubordinateSettlements(viewerId, { startDate, endDate });
+  return settlements.reduce(
+    (acc, s) => ({
+      totalSettlement: acc.totalSettlement + (s.final_settlement || 0),
+      totalRolling: acc.totalRolling + (s.total_rolling || 0),
+      totalLosing: acc.totalLosing + (s.total_losing || 0),
+      totalGGR: acc.totalGGR + (s.total_ggr || 0),
+      totalDepositWithdrawalDiff: acc.totalDepositWithdrawalDiff + (s.deposit_withdrawal_diff || 0),
+      count: acc.count + 1,
+    }),
+    { totalSettlement: 0, totalRolling: 0, totalLosing: 0, totalGGR: 0, totalDepositWithdrawalDiff: 0, count: 0 }
+  );
+}
+
+export async function getSettlementDetail(settlementId: string): Promise<DetailedSettlement | null> {
+  return null;
+}
+
+export async function getSettlementsByRole(viewerId: string, startDate?: string, endDate?: string) {
+  const settlements = await getSubordinateSettlements(viewerId, { startDate, endDate });
+  const byRole: Record<string, { totalSettlement: number; totalRolling: number; totalLosing: number; totalGGR: number; count: number }> = {};
+  for (const s of settlements) {
+    const role = s.target_role;
+    if (!byRole[role]) byRole[role] = { totalSettlement: 0, totalRolling: 0, totalLosing: 0, totalGGR: 0, count: 0 };
+    byRole[role].totalSettlement += s.final_settlement || 0;
+    byRole[role].totalRolling += s.total_rolling || 0;
+    byRole[role].totalLosing += s.total_losing || 0;
+    byRole[role].totalGGR += s.total_ggr || 0;
+    byRole[role].count += 1;
+  }
+  return byRole;
 }

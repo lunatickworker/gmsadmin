@@ -485,7 +485,7 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
                   status: g.status,
                   min_bet: null,
                   max_bet: null,
-                  metadata: { ...g.metadata, _honor: true, _honorVendor: g.vendor_key, _gameId: g.game_id },
+                  metadata: { ...g.metadata, _honor: true, _honorVendor: g.vendor_key, _gameId: g.game_id, _type: g.type },
                 });
               }
 
@@ -607,30 +607,45 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
     await supabase.from('users').update({ active_game_session: sessionData }).eq('id', user!.id);
   };
 
-  // 활성 세션 DB + localStorage 초기화 + online_sessions 비활성화
+  // 활성 세션 DB + localStorage 초기화 + online_sessions 행 삭제
   const clearActiveSessionFromDB = async () => {
     localStorage.removeItem(ACTIVE_GAME_SESSION_KEY);
-    const now = new Date().toISOString();
     await Promise.all([
       supabase.from('users').update({ active_game_session: null }).eq('id', user!.id),
-      supabase.from('online_sessions')
-        .update({ is_active: false, logout_at: now })
-        .eq('user_id', user!.id)
-        .eq('is_active', true),
+      supabase.from('online_sessions').delete().eq('user_id', user!.id),
     ]);
   };
 
   // 게임 시작 시 online_sessions에 세션 기록
   const insertOnlineSession = async (session: ActiveSession, providerName: string, gameName: string) => {
     const now = new Date().toISOString();
+    // 기존 세션 먼저 삭제 (중복 방지)
+    await supabase.from('online_sessions').delete().eq('user_id', user!.id);
+
+    // 클라이언트 IP 캡처 (여러 서비스 순차 시도)
+    let ip_address: string | null = null;
+    const ipServices = [
+      { url: 'https://api.ipify.org?format=json', key: 'ip' },
+      { url: 'https://api64.ipify.org?format=json', key: 'ip' },
+      { url: 'https://api.my-ip.io/v2/ip.json', key: 'ip' },
+    ];
+    for (const svc of ipServices) {
+      try {
+        const ipRes = await fetch(svc.url, { signal: AbortSignal.timeout(3000) });
+        const ipData = await ipRes.json();
+        const val = ipData[svc.key];
+        if (val && typeof val === 'string') { ip_address = val; break; }
+      } catch { /* 다음 서비스 시도 */ }
+    }
+
     await supabase.from('online_sessions').insert({
       user_id: user!.id,
       session_token: session.cashout_token,
       login_at: now,
       last_activity_at: now,
-      is_active: true,
       provider_name: providerName,
       game_name: gameName,
+      ip_address,
     });
   };
 
@@ -687,7 +702,7 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
         const aceSession: ActiveSession = { vendor, vendorType: 'ace', username: user.username, cashout_token: crypto.randomUUID() };
         activeSession.current = aceSession;
         await saveActiveSessionToDB(aceSession);
-        insertOnlineSession(aceSession, provider.name ?? vendor.vendor_key, game.game_name ?? game.game_code).catch(() => { /* best-effort */ });
+        await insertOnlineSession(aceSession, provider.name ?? vendor.vendor_key, game.game_name ?? game.game_code).catch(() => { /* best-effort */ });
         gameWindowRef.current = window.open(launchUrl, '_blank');
         setLaunchModal({ game, provider, launchUrl: null, loading: false, error: null, openedInNewTab: true });
         return;
@@ -695,27 +710,39 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
 
       // ── HONOR 게임 실행 ────────────────────────────────────────────
       if (vendor.vendor_key === 'honor') {
-        const honorVendorName = (game.metadata?._honorVendor ?? game.metadata?.vendor ?? '') as string;
-        const gameId = game.metadata?._gameId ?? parseInt(game.game_code.split('_').slice(1).join('_'), 10);
+        // honorVendorName: provider metadata 우선, 없으면 game metadata (관리자 페이지와 동일한 로직)
+        const honorVendorName = ((provider as any).metadata?.honor_vendor || (game.metadata?._honorVendor ?? game.metadata?.vendor ?? '')) as string;
+        // 로비 타입은 vendor_key(문자열 ID)를 game_id로 사용, 일반 게임은 _gameId 정수 사용 (관리자 페이지와 동일)
+        const isLobby = game.metadata?._type === 'lobby' || game.metadata?.type === 'lobby';
+        const gameId: string | number = isLobby
+          ? (game.metadata?._honorVendor ?? game.metadata?._gameId)
+          : (game.metadata?._gameId ?? parseInt(game.game_code.split('_').slice(1).join('_'), 10));
         if (!gameId) throw new Error('게임 ID를 파악할 수 없습니다.');
 
-        // 1. HONOR 유저 잔액 확인 → 잔액이 있으면 먼저 전액 회수
+        // 1. game-launch-link auto-creates the user and returns a launch link
+        //    Call it first so the user exists before balance operations
+        const firstResult = await honorVendorService.getGameLaunchLink(
+          vendor, user.username, gameId, honorVendorName, { nickname: user.username }
+        );
+        if (!firstResult.link) throw new Error('게임 URL을 받을 수 없습니다.');
+
+        // 2. HONOR 유저 잔액 확인 → 잔액이 있으면 먼저 전액 회수
         try {
           const honorUser = await honorVendorService.getUser(vendor, user.username);
           const honorBalance = Number(honorUser?.balance ?? 0);
           if (honorBalance > 0) {
             await honorVendorService.subBalance(vendor, user.username, honorBalance);
           }
-        } catch { /* 유저 미존재 또는 오류 무시 */ }
+        } catch { /* 오류 무시 */ }
 
-        // 2. 플랫폼 잔액 → HONOR 충전 (DB 잔액은 0으로 만들지 않음)
+        // 3. 플랫폼 잔액 → HONOR 충전 (DB 잔액은 0으로 만들지 않음)
         const platformBalance = await getPlatformBalance();
         if (platformBalance > 0) {
           await honorVendorService.addBalance(vendor, user.username, platformBalance);
           deductVendorBalanceOnCharge(vendor.vendor_key, platformBalance).catch(() => {});
         }
 
-        // 3. 게임 실행
+        // 4. 게임 실행 (fresh token after balance update)
         const result = await honorVendorService.getGameLaunchLink(
           vendor, user.username, gameId, honorVendorName, { nickname: user.username }
         );
@@ -726,7 +753,8 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
         activeSession.current = honorSession;
         await saveActiveSessionToDB(honorSession);
         insertOnlineSession(honorSession, provider.name ?? vendor.vendor_key, game.game_name ?? game.game_code).catch(() => { /* best-effort */ });
-        setLaunchModal({ game, provider, launchUrl, loading: false, error: null });
+        gameWindowRef.current = window.open(launchUrl, '_blank');
+        setLaunchModal({ game, provider, launchUrl: null, loading: false, error: null, openedInNewTab: true });
         return;
       }
 
@@ -773,12 +801,32 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
       activeSession.current = investSession;
       await saveActiveSessionToDB(investSession);
       insertOnlineSession(investSession, provider.name ?? vendor.vendor_key, game.game_name ?? game.game_code).catch(() => { /* best-effort */ });
-      setLaunchModal({ game, provider, launchUrl, loading: false, error: null });
+      gameWindowRef.current = window.open(launchUrl, '_blank');
+      setLaunchModal(null);
 
     } catch (e: any) {
       delete tokenCache.current[provider.vendor?.id ?? ''];
       setLaunchModal(null);
-      toast.error(`게임 실행 실패: ${e.message}`);
+
+      // 프록시 403 = 에이전트 잔액 부족 → 사용자 친화적 메시지 + DB 기록
+      const is403 = /proxy error 403/i.test(e.message ?? '');
+      if (is403) {
+        toast.error('게임 실행 중 오류가 발생했습니다. 관리자에게 문의해 주세요.', { duration: 6000 });
+        // 오류를 money_error_logs에 기록 (best-effort)
+        const vendorKey = provider.vendor?.vendor_key ?? 'unknown';
+        supabase.from('money_error_logs').insert({
+          user_id: user?.id ?? null,
+          username: user?.username ?? 'unknown',
+          vendor: vendorKey,
+          error_code: 403,
+          error_type: 'insufficient_agent_balance',
+          error_message: e.message,
+          amount: await getPlatformBalance().catch(() => 0),
+          status: 'error',
+        }).then(() => { /* best-effort */ });
+      } else {
+        toast.error(`게임 실행 실패: ${e.message}`);
+      }
     } finally { setLaunchingGameId(null); }
   };
 
@@ -802,10 +850,13 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
         );
         newUrl = res.url ?? null;
       } else if (vendor.vendor_key === 'honor') {
-        const honorVendorName = (game.metadata?._honorVendor ?? game.metadata?.vendor ?? '') as string;
-        const gameId = game.metadata?._gameId ?? parseInt(game.game_code.split('_').slice(1).join('_'), 10);
-        if (!gameId) throw new Error('게임 ID를 파악할 수 없습니다.');
-        const result = await honorVendorService.getGameLaunchLink(vendor, user.username, gameId, honorVendorName, { nickname: user.username });
+        const honorVendorNameNT = ((launchModal.provider as any).metadata?.honor_vendor || (game.metadata?._honorVendor ?? game.metadata?.vendor ?? '')) as string;
+        const isLobbyNT = game.metadata?._type === 'lobby' || game.metadata?.type === 'lobby';
+        const gameIdNT: string | number = isLobbyNT
+          ? (game.metadata?._honorVendor ?? game.metadata?._gameId)
+          : (game.metadata?._gameId ?? parseInt(game.game_code.split('_').slice(1).join('_'), 10));
+        if (!gameIdNT) throw new Error('게임 ID를 파악할 수 없습니다.');
+        const result = await honorVendorService.getGameLaunchLink(vendor, user.username, gameIdNT as number, honorVendorNameNT, { nickname: user.username });
         newUrl = result.link ?? null;
       } else {
         newUrl = launchModal.launchUrl;
@@ -970,7 +1021,7 @@ export default function GameLobby({ user, balance, onLogin, onLogout, onSignup }
         game_type: (g.type === 'casino' || g.type === 'slot') ? g.type : null,
         thumbnail_url: g.thumbnail ?? null, status: g.status,
         min_bet: null, max_bet: null,
-        metadata: { ...g.metadata, _honor: true, _honorVendor: g.vendor_key, _gameId: g.game_id },
+        metadata: { ...g.metadata, _honor: true, _honorVendor: g.vendor_key, _gameId: g.game_id, _type: g.type },
       }));
     }
 

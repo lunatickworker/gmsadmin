@@ -362,7 +362,7 @@ export default function GameListManage() {
         tokenCache.current[vendor.id] = await gameLaunchService.getToken(vendor);
       }
       const url = await gameLaunchService.launch(vendor, tokenCache.current[vendor.id], gameId);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      window.open(url, '_blank');
     } catch (e: any) {
       delete tokenCache.current[vendor?.id ?? ''];
       toast.error(`게임 실행 실패: ${e.message}`);
@@ -458,7 +458,7 @@ export default function GameListManage() {
         platform: 'desktop',
         requestKey: String(Date.now()),
       });
-      window.open(result.url, '_blank', 'noopener,noreferrer');
+      window.open(result.url, '_blank');
     } catch (e: any) {
       toast.error(`게임 실행 실패: ${e.message}`);
     } finally {
@@ -567,7 +567,7 @@ export default function GameListManage() {
       const result = await honorVendorService.getGameLaunchLink(
         vendor, 'dev1', launchId as number, honorVendorName, { nickname: 'dev1' }
       );
-      window.open(result.link, '_blank', 'noopener,noreferrer');
+      window.open(result.link, '_blank');
     } catch (e: any) {
       toast.error(`게임 실행 실패: ${e.message}`);
     } finally {

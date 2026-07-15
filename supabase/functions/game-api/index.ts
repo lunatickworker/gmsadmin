@@ -24,25 +24,31 @@ async function honorRequest<T = any>(
 ): Promise<T> {
   let url = `${apiBaseUrl.replace(/\/$/, "")}${endpoint}`;
 
-  if (params && Object.keys(params).length > 0) {
+  // GET: params → query string; POST: params → body
+  if (method === "GET" && params && Object.keys(params).length > 0) {
     const qs = new URLSearchParams(
-      Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
+      Object.entries(params).map(([k, v]) => [k, String(v)])
     ).toString();
     url = `${url}?${qs}`;
+  }
+
+  const proxyPayload: Record<string, any> = {
+    url,
+    method,
+    headers: {
+      "Authorization": `Bearer ${secretKey}`,
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+    },
+  };
+  if (method === "POST" && params && Object.keys(params).length > 0) {
+    proxyPayload.body = params;
   }
 
   const res = await fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url,
-      method,
-      headers: {
-        "Authorization": `Bearer ${secretKey}`,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-    }),
+    body: JSON.stringify(proxyPayload),
   });
 
   if (!res.ok) throw new Error(`Honor proxy error ${res.status}: ${res.statusText}`);

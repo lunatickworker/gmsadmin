@@ -30,14 +30,9 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
-    const now = new Date().toISOString();
     const [usersResult] = await Promise.all([
       serviceSupabase.from("users").update({ is_online: false }).eq("id", userId),
-      serviceSupabase
-        .from("online_sessions")
-        .update({ is_active: false, logout_at: now })
-        .eq("user_id", userId)
-        .eq("is_active", true),
+      serviceSupabase.from("online_sessions").delete().eq("user_id", userId),
     ]);
 
     if (usersResult.error) {

@@ -807,7 +807,7 @@ export default function GameVendorManage() {
                         ...f,
                         vendor_key: key,
                         // Honor 감지 시 API URL 자동 설정
-                        api_base_url: key === HONOR_VENDOR_KEY ? 'https://api.honorlink.org/ap' : f.api_base_url,
+                        api_base_url: key === HONOR_VENDOR_KEY ? 'https://api.honorlink.org/api' : f.api_base_url,
                       }));
                     }}
                     placeholder="invest / honor / ace"

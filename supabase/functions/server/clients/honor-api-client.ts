@@ -1,5 +1,5 @@
 // HONOR 게임사 API 클라이언트
-// Endpoint: https://api.honorlink.org/ap
+// Endpoint: https://api.honorlink.org/api
 // Auth: Authorization: Bearer {secret_key} (game_vendors.secret_key)
 // Proxy: https://proxy.gms0811.com/proxy
 
@@ -75,10 +75,10 @@ export class HonorApiClient {
   private async request<T>(endpoint: string, method: "GET" | "POST", params?: Record<string, string | number>): Promise<T> {
     let url = `${this.apiBaseUrl}${endpoint}`;
 
-    // 모든 파라미터를 URL 쿼리스트링으로 전달 (GET/POST 공통)
-    if (params && Object.keys(params).length > 0) {
+    // GET: params → query string; POST: params → body
+    if (method === "GET" && params && Object.keys(params).length > 0) {
       const qs = new URLSearchParams(
-        Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
+        Object.entries(params).map(([k, v]) => [k, String(v)])
       ).toString();
       url = `${url}?${qs}`;
     }
@@ -92,6 +92,9 @@ export class HonorApiClient {
         "Content-Type": "application/json",
       },
     };
+    if (method === "POST" && params && Object.keys(params).length > 0) {
+      proxyBody.body = params;
+    }
 
     const response = await fetch(PROXY_URL, {
       method: "POST",

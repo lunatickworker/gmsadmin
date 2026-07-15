@@ -357,14 +357,6 @@ class HonorProviderService {
     const baseUrl = vendor.api_base_url.replace(/\/$/, "");
     let url = `${baseUrl}${endpoint}`;
 
-    // 모든 파라미터를 URL 쿼리스트링으로 전달
-    if (params && Object.keys(params).length > 0) {
-      const qs = new URLSearchParams(
-        Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
-      ).toString();
-      url = `${url}?${qs}`;
-    }
-
     const proxyBody: any = {
       url,
       method,
@@ -374,6 +366,9 @@ class HonorProviderService {
         "Content-Type": "application/json",
       },
     };
+    if (params && Object.keys(params).length > 0) {
+      proxyBody.body = params;
+    }
 
     const res = await fetch("https://proxy.gms0811.com/proxy", {
       method: "POST",

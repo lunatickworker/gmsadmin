@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2, RefreshCw, TrendingUp, TrendingDown, Clock, Gamepad2, ChevronDown, ChevronUp } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
-import { aceVendorService, type GameVendor } from '../../../utils/game-management';
+import { aceVendorService, honorVendorService, type GameVendor } from '../../../utils/game-management';
 
 interface User { id: string; username: string; name: string; }
 
@@ -66,7 +66,7 @@ function mergeRounds(rawRows: BetRow[]): MergedRound[] {
     const { bet, settle, primary } = g;
     const betRaw    = (bet?.raw_data    ?? {}) as Record<string, unknown>;
     const settleRaw = (settle?.raw_data ?? {}) as Record<string, unknown>;
-    const bet_amount = bet    ? Number(bet.bet_amount)    : 0;
+    const bet_amount = bet    ? Number(bet.bet_amount)    : (settle ? Number(settle.bet_amount) : 0);
     const win_amount = settle ? Number(settle.win_amount) : 0;
     merged.push({
       key,
@@ -103,7 +103,14 @@ const VENDOR_TABLE_MAP: Record<string, string> = {
   ace:    'betting_history_ace',
 };
 
-const PAGE_SIZE = 20;
+// honor: is_bonus, is_jackpot 컬럼 없음 / invest: game_category, is_bonus, is_jackpot 없음
+const VENDOR_SELECT_MAP: Record<string, string> = {
+  invest: 'id, txid, round_id, provider_name, game_name, game_type, bet_amount, win_amount, ggr, bet_time, settle_time, round_status, raw_data',
+  honor:  'id, txid, round_id, provider_name, game_name, game_type, game_category, bet_amount, win_amount, ggr, bet_time, settle_time, round_status, raw_data',
+  ace:    'id, txid, round_id, provider_name, game_name, game_type, game_category, bet_amount, win_amount, ggr, bet_time, settle_time, round_status, is_bonus, is_jackpot, raw_data',
+};
+
+const PAGE_SIZE_OPTIONS = [10, 20, 30, 100] as const;
 
 export default function BettingHistoryPage({ user }: { user: User | null }) {
   const [activeVendors, setActiveVendors] = useState<string[]>([]);
@@ -113,6 +120,7 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
   const [syncMsg, setSyncMsg]   = useState('');
   const [page, setPage]         = useState(0);
   const [hasMore, setHasMore]   = useState(false);
+  const [pageSize, setPageSize] = useState<number>(20);
   const [initialized, setInitialized] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const syncedOnce = useRef(false);
@@ -142,7 +150,7 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
   };
 
   // 오늘 베팅 내역만 조회
-  const load = useCallback(async (vendors: string[], p: number) => {
+  const load = useCallback(async (vendors: string[], p: number, size: number = pageSize) => {
     if (!user || vendors.length === 0) {
       setRows([]);
       setLoading(false);
@@ -151,16 +159,17 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
     setLoading(true);
 
     const todayStart = getTodayStart();
-    const from = p * PAGE_SIZE;
+    const from = p * size;
     const queries = vendors.map(vk => {
       const table = VENDOR_TABLE_MAP[vk];
+      const selectCols = VENDOR_SELECT_MAP[vk] ?? VENDOR_SELECT_MAP['ace'];
       return supabase
         .from(table)
-        .select('id, txid, round_id, provider_name, game_name, game_type, game_category, bet_amount, win_amount, ggr, bet_time, settle_time, round_status, is_bonus, is_jackpot, raw_data')
+        .select(selectCols)
         .eq('user_id', user.id)
-        .or(`bet_time.gte.${todayStart},settle_time.gte.${todayStart}`)
+        .gte('bet_time', todayStart)
         .order('bet_time', { ascending: false, nullsFirst: false })
-        .range(from, from + PAGE_SIZE * 2 - 1)
+        .range(from, from + size * 2 - 1)
         .then(res =>
           (res.data ?? []).map((row: Omit<BetRow, 'api_type'>) => ({
             ...row,
@@ -177,12 +186,12 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
         const tb = b.bet_time ? new Date(b.bet_time).getTime() : 0;
         return tb - ta;
       });
-    const merged = mergeRounds(allRaw).slice(0, PAGE_SIZE);
+    const merged = mergeRounds(allRaw).slice(0, size);
 
-    setRows(prev => p === 0 ? merged : [...prev, ...merged]);
-    setHasMore(results.some(r => r.length === PAGE_SIZE));
+    setRows(merged);
+    setHasMore(results.some(r => r.length >= size));
     setLoading(false);
-  }, [user?.id]);
+  }, [user?.id, pageSize]);
 
   // 1단계: 초기화되면 즉시 기존 데이터 표시
   useEffect(() => {
@@ -190,59 +199,65 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
     load(activeVendors, 0);
   }, [activeVendors, initialized, load]);
 
-  // 2단계: 초기 로드 후 백그라운드 ACE 동기화 → 완료 후 목록 갱신
+  // 2단계: 초기 로드 후 백그라운드 ACE + Honor 동기화 → 완료 후 목록 갱신
   useEffect(() => {
     if (!user || !initialized || syncedOnce.current) return;
     syncedOnce.current = true;
 
-    supabase
-      .from('game_vendors')
-      .select('*')
-      .eq('vendor_key', 'ace')
-      .eq('is_active', true)
-      .then(async ({ data: vendors }) => {
-        if (!vendors || vendors.length === 0) return;
+    (async () => {
+      setSyncing(true);
+      setSyncMsg('새 베팅 내역 동기화 중...');
+      let totalNew = 0;
 
-        setSyncing(true);
-        setSyncMsg('새 베팅 내역 동기화 중...');
-
-        const sdate = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-        let totalNew = 0;
-
-        for (const vendor of vendors) {
-          try {
-            const r = await aceVendorService.syncBettingHistory(vendor as GameVendor, {
-              sdate,
-              limit: 500,
-            });
-            totalNew += r.inserted + r.updated;
-          } catch {
-            // 실패 시 조용히 무시
+      // ACE 동기화
+      try {
+        const { data: aceVendors } = await supabase
+          .from('game_vendors')
+          .select('*')
+          .eq('vendor_key', 'ace')
+          .eq('is_active', true);
+        if (aceVendors && aceVendors.length > 0) {
+          const sdate = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+          for (const vendor of aceVendors) {
+            try {
+              const r = await aceVendorService.syncBettingHistory(vendor as GameVendor, { sdate, limit: 500 });
+              totalNew += r.inserted + r.updated;
+            } catch { /* 조용히 무시 */ }
           }
         }
+      } catch { /* 조용히 무시 */ }
 
-        setSyncing(false);
-        if (totalNew > 0) {
-          setSyncMsg(`${totalNew}건 업데이트됨`);
-          // 새 데이터 있을 때만 목록 갱신
-          setPage(0);
-          load(activeVendors, 0);
-        } else {
-          setSyncMsg('최신 상태');
+      // Honor 동기화 (최근 2시간, 1시간씩 청크)
+      try {
+        const { data: honorVendors } = await supabase
+          .from('game_vendors')
+          .select('*')
+          .eq('vendor_key', 'honor')
+          .eq('is_active', true);
+        if (honorVendors && honorVendors.length > 0) {
+          for (const vendor of honorVendors) {
+            try {
+              const r = await honorVendorService.syncBettingHistory(vendor as GameVendor, { hours: 2 });
+              totalNew += r.inserted + r.updated;
+            } catch { /* 조용히 무시 */ }
+          }
         }
-        setTimeout(() => setSyncMsg(''), 4000);
-      })
-      .catch(() => {
-        setSyncing(false);
-        setSyncMsg('');
-      });
-  }, [user?.id, initialized, activeVendors, load]);
+      } catch { /* 조용히 무시 */ }
 
-  const loadMore = () => {
-    const next = page + 1;
-    setPage(next);
-    load(activeVendors, next);
-  };
+      setSyncing(false);
+      if (totalNew > 0) {
+        setSyncMsg(`${totalNew}건 업데이트됨`);
+        setPage(0);
+        load(activeVendors, 0);
+      } else {
+        setSyncMsg('최신 상태');
+      }
+      setTimeout(() => setSyncMsg(''), 4000);
+    })().catch(() => {
+      setSyncing(false);
+      setSyncMsg('');
+    });
+  }, [user?.id, initialized, activeVendors, load]);
 
   const toggleExpand = (id: string) => {
     setExpandedRows(prev => {
@@ -342,7 +357,18 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
         </div>
       ) : (
         <>
-          <div className="space-y-2">
+          {/* 테이블 헤더 */}
+          <div className="hidden sm:grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1.5fr_auto] gap-x-3 px-3 py-2 text-[11px] text-slate-600 border-b border-white/5 mb-1">
+            <span>게임명</span>
+            <span className="text-right">베팅액</span>
+            <span className="text-right">당첨액</span>
+            <span className="text-right">손익</span>
+            <span className="text-center">상태</span>
+            <span className="text-right">베팅 시간</span>
+            <span></span>
+          </div>
+
+          <div className="space-y-px">
             {rows.filter(row => row.bet_time !== null || row.settle_time !== null).map(row => {
               const ggr      = row.ggr;
               const won      = Number(row.win_amount) > 0;
@@ -353,98 +379,65 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
               return (
                 <div
                   key={row.key}
-                  className="bg-[#0d0d0d] border border-white/5 rounded-xl overflow-hidden"
+                  className="bg-[#0d0d0d] border border-white/5 rounded-lg overflow-hidden"
                 >
-                  {/* 메인 행 */}
-                  <div className="px-4 py-3.5">
-                    <div className="flex items-start justify-between gap-3">
-                      {/* 좌측 */}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <span className="text-white font-semibold text-sm truncate">{row.game_name || '-'}</span>
-                          {row.is_jackpot && (
-                            <span className="text-[10px] text-yellow-400 bg-yellow-900/30 px-1.5 py-0.5 rounded font-bold">JACKPOT</span>
-                          )}
-                          {row.is_bonus && (
-                            <span className="text-[10px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded font-bold">BONUS</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {row.provider_name && (
-                            <span className="text-[11px] text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">
-                              {row.provider_name}
-                            </span>
-                          )}
-                          {row.game_type && (
-                            <span className="text-[11px] text-slate-600">{row.game_type}</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 우측 */}
-                      <div className="text-right shrink-0">
-                        <div className="flex items-center justify-end gap-1.5 mb-1">
-                          {won
-                            ? <TrendingUp size={13} className="text-green-400" />
-                            : <TrendingDown size={13} className="text-red-400" />
-                          }
-                          <span className={`text-sm font-bold ${won ? 'text-green-400' : 'text-red-400'}`}>
-                            {won ? '+' : '-'}{fmtMoney(Math.abs(ggr))}
-                          </span>
-                        </div>
-                      </div>
+                  {/* 한 줄 메인 행 */}
+                  <div
+                    className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1.5fr_auto] gap-x-3 items-center px-3 py-2.5 cursor-pointer hover:bg-white/[0.02] transition-colors"
+                    onClick={() => toggleExpand(row.key)}
+                  >
+                    {/* 게임명 + 태그 */}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-white text-[13px] font-medium truncate">{row.game_name || '-'}</span>
+                      {row.provider_name && (
+                        <span className="hidden sm:inline text-[10px] text-slate-500 bg-white/5 px-1.5 py-0.5 rounded shrink-0">{row.provider_name}</span>
+                      )}
+                      {row.game_type && (
+                        <span className="hidden md:inline text-[10px] text-slate-600 bg-white/5 px-1.5 py-0.5 rounded shrink-0">{row.game_type}</span>
+                      )}
+                      {row.is_jackpot && <span className="text-[9px] text-yellow-400 bg-yellow-900/30 px-1 py-0.5 rounded font-bold shrink-0">JP</span>}
+                      {row.is_bonus   && <span className="text-[9px] text-purple-400 bg-purple-900/30 px-1 py-0.5 rounded font-bold shrink-0">B</span>}
                     </div>
 
-                    {/* 보유금 흐름 - 한 줄 표시 */}
-                    <div className="mt-2 flex items-center gap-1 flex-wrap text-[11px] font-mono">
-                      {before !== null && (
-                        <>
-                          <span className="text-slate-500 font-sans">이전</span>
-                          <span className="text-yellow-300">{Number(before).toLocaleString()}</span>
-                        </>
-                      )}
-                      {row.bet_amount > 0 && (
-                        <>
-                          <span className="text-slate-500 font-sans">베팅</span>
-                          <span className="text-red-300">-{Number(row.bet_amount).toLocaleString()}</span>
-                        </>
-                      )}
-                      {(row.win_amount > 0 || row.round_status === 'settled' || row.round_status === 'turn_lose') && (
-                        <>
-                          <span className="text-slate-500 font-sans">당첨</span>
-                          <span className={Number(row.win_amount) > 0 ? 'text-green-300' : 'text-slate-500'}>
-                            {Number(row.win_amount) > 0 ? '+' : ''}{Number(row.win_amount).toLocaleString()}
-                          </span>
-                        </>
-                      )}
-                      {after !== null && (
-                        <>
-                          <span className="text-slate-500 font-sans">현재</span>
-                          <span className="text-emerald-300">{Number(after).toLocaleString()}</span>
-                        </>
-                      )}
+                    {/* 베팅액 */}
+                    <span className="text-right text-[13px] text-slate-300 font-mono tabular-nums">
+                      {fmtMoney(Number(row.bet_amount))}
+                    </span>
+
+                    {/* 당첨액 */}
+                    <span className={`text-right text-[13px] font-mono tabular-nums ${Number(row.win_amount) > 0 ? 'text-green-400' : 'text-slate-600'}`}>
+                      {fmtMoney(Number(row.win_amount))}
+                    </span>
+
+                    {/* 손익 */}
+                    <div className="flex items-center justify-end gap-1">
+                      {won
+                        ? <TrendingUp size={11} className="text-green-400 shrink-0" />
+                        : <TrendingDown size={11} className="text-red-400 shrink-0" />
+                      }
+                      <span className={`text-[13px] font-bold font-mono tabular-nums ${won ? 'text-green-400' : 'text-red-400'}`}>
+                        {won ? '+' : '-'}{fmtMoney(Math.abs(ggr))}
+                      </span>
                     </div>
 
-                    {/* 시간 + 펼치기 */}
-                    <div className="flex items-center justify-between mt-2">
-                      <div className="flex items-center gap-1.5 text-slate-600">
-                        <Clock size={11} />
-                        <span className="text-[11px]">{fmtDate(row.bet_time ?? row.settle_time)}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {won && (
-                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded text-green-400 bg-green-400/10">
-                            당첨
-                          </span>
-                        )}
-                        <button
-                          onClick={() => toggleExpand(row.key)}
-                          className="text-slate-600 hover:text-slate-400 transition-colors"
-                        >
-                          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                        </button>
-                      </div>
+                    {/* 상태 */}
+                    <div className="flex justify-center">
+                      {won
+                        ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded text-green-400 bg-green-400/10">당첨</span>
+                        : <span className="text-[11px] text-slate-600">-</span>
+                      }
                     </div>
+
+                    {/* 베팅 시간 */}
+                    <div className="flex items-center justify-end gap-1 text-slate-600">
+                      <Clock size={10} className="shrink-0" />
+                      <span className="text-[11px]">{fmtDate(row.bet_time ?? row.settle_time)}</span>
+                    </div>
+
+                    {/* 펼치기 버튼 */}
+                    <button className="text-slate-600 hover:text-slate-400 transition-colors pl-1">
+                      {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    </button>
                   </div>
 
                   {/* 확장 상세 정보 */}
@@ -485,15 +478,49 @@ export default function BettingHistoryPage({ user }: { user: User | null }) {
             })}
           </div>
 
-          {hasMore && (
-            <button
-              onClick={loadMore}
-              disabled={loading}
-              className="w-full mt-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:bg-white/10 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
-            >
-              {loading ? <Loader2 size={15} className="animate-spin" /> : '더 보기'}
-            </button>
-          )}
+          {/* 페이지 내비게이션 */}
+          <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
+            {/* 페이지 크기 선택 */}
+            <div className="flex items-center gap-2">
+              <span className="text-slate-600 text-xs">페이지당</span>
+              <div className="flex gap-1">
+                {PAGE_SIZE_OPTIONS.map(size => (
+                  <button
+                    key={size}
+                    onClick={() => { setPageSize(size); setPage(0); load(activeVendors, 0, size); }}
+                    className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                      pageSize === size
+                        ? 'bg-[#c9a227]/20 text-[#c9a227] border border-[#c9a227]/40'
+                        : 'bg-white/5 text-slate-500 hover:bg-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+              <span className="text-slate-600 text-xs">개</span>
+            </div>
+
+            {/* 이전/다음 */}
+            <div className="flex items-center gap-2">
+              {loading && <Loader2 size={13} className="animate-spin text-[#c9a227]" />}
+              <button
+                onClick={() => { const prev = page - 1; setPage(prev); load(activeVendors, prev); }}
+                disabled={page === 0 || loading}
+                className="px-3 py-1.5 rounded text-xs bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                이전
+              </button>
+              <span className="text-slate-400 text-sm font-medium px-1">{page + 1} 페이지</span>
+              <button
+                onClick={() => { const next = page + 1; setPage(next); load(activeVendors, next); }}
+                disabled={!hasMore || loading}
+                className="px-3 py-1.5 rounded text-xs bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                다음
+              </button>
+            </div>
+          </div>
         </>
       )}
     </div>
